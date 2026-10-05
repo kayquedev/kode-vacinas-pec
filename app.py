@@ -4,22 +4,124 @@ Kode Vacinas PEC - Interface Web
 =================================
 Aplicacao Flask para upload e analise de CSVs do e-SUS PEC,
 cruzando com o Calendario PNI 2026. Gera relatorio consolidado
-por paciente no estilo Kode APS.
+por paciente no estilo Kode APS, com unificacao de imunos e
+filtros interativos.
 
 Deploy: vacinas.kodesaude.com.br
 """
 import io
+import json
 import os
+import re
 import tempfile
+from collections import OrderedDict
 from datetime import date
-from flask import Flask, render_template_string, request, send_file, flash, redirect, url_for
-from analisador_vacinas import analisar, exportar_csv, consolidar_por_paciente, validar_contra_calendario, ler_csv_pec
+from flask import Flask, render_template_string, request, send_file, flash, redirect, url_for, jsonify
+
+from analisador_vacinas import analisar, exportar_csv, _parse_idade_meses
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "kode-vacinas-pec-secret-key-2026")
 
 UPLOAD_FOLDER = tempfile.mkdtemp(prefix="kode_vacinas_")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB max
+
+# Armazena resultado da ultima analise em memoria (sessao unica)
+_ultimo_resultado = None
+_ultimo_csv_path = None
+
+
+def _unificar_imunos(imunos_pendentes):
+    """Unifica imunos iguais agrupando doses entre parenteses.
+
+    Exemplo de entrada:
+        ['poliomielite (D1) [Atrasada]', 'poliomielite (D2) [Atrasada]',
+         'meningo C (D1) [No prazo]']
+
+    Saida:
+        ['poliomielite (D1, D2)', 'meningo C (D1)']
+    """
+    if not imunos_pendentes:
+        return []
+
+    grupos = OrderedDict()
+    for imuno_str in imunos_pendentes:
+        # Extrai nome base (antes do primeiro parentese ou colchete)
+        match = re.match(r'^([^([]+?)(?:\s*\(|\s*\[|$)', imuno_str.strip())
+        nome_base = match.group(1).strip() if match else imuno_str.strip()
+
+        # Extrai dose (entre parenteses)
+        dose_match = re.search(r'\(([^)]+)\)', imuno_str)
+        dose = dose_match.group(1).strip() if dose_match else ""
+
+        if nome_base not in grupos:
+            grupos[nome_base] = []
+        if dose and dose not in grupos[nome_base]:
+            grupos[nome_base].append(dose)
+
+    resultado = []
+    for nome, doses in grupos.items():
+        if doses:
+            resultado.append(f"{nome} ({', '.join(doses)})")
+        else:
+            resultado.append(nome)
+
+    return resultado
+
+
+def _aplicar_filtros(pacientes, filtros):
+    """Aplica filtros na lista de pacientes."""
+    if not filtros:
+        return pacientes
+
+    resultado = []
+    idade_min = filtros.get("idade_min")
+    idade_max = filtros.get("idade_max")
+    endereco_busca = filtros.get("endereco", "").lower().strip()
+    imuno_busca = filtros.get("imuno", "").lower().strip()
+    imunos_remover = filtros.get("imunos_remover", [])
+
+    for p in pacientes:
+        # Filtro faixa etaria
+        if idade_min is not None or idade_max is not None:
+            idade_m = p.get("idade_meses")
+            if idade_m is not None:
+                if idade_min is not None and idade_m < idade_min:
+                    continue
+                if idade_max is not None and idade_m > idade_max:
+                    continue
+
+        # Filtro endereco
+        if endereco_busca:
+            if endereco_busca not in (p.get("endereco") or "").lower():
+                continue
+
+        # Filtrar imunos pendentes
+        imunos_filtrados = list(p.get("imunos_pendentes", []))
+
+        # Remover imunos selecionados
+        if imunos_remover:
+            imunos_filtrados = [
+                i for i in imunos_filtrados
+                if not any(rem.lower() in i.lower() for rem in imunos_remover)
+            ]
+
+        # Filtro por imuno especifico
+        if imuno_busca:
+            imunos_filtrados = [
+                i for i in imunos_filtrados
+                if imuno_busca in i.lower()
+            ]
+
+        # So inclui paciente se ainda tem imunos pendentes apos filtros
+        if imunos_filtrados:
+            p_copia = dict(p)
+            p_copia["imunos_pendentes"] = imunos_filtrados
+            p_copia["total_imunos"] = len(imunos_filtrados)
+            resultado.append(p_copia)
+
+    return resultado
+
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -59,19 +161,17 @@ HTML_TEMPLATE = """
         .btn-success { background: var(--success); color: white; }
         .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
         .btn-outline:hover { background: var(--bg); }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
         .stat-card { background: var(--bg); border-radius: 8px; padding: 16px; text-align: center; }
         .stat-value { font-size: 2rem; font-weight: 700; color: var(--primary); }
         .stat-label { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
         table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        th { background: var(--bg); padding: 12px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); position: sticky; top: 0; }
+        th { background: var(--bg); padding: 12px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 10; }
         td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
         tr:hover { background: #f8fafc; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 500; }
-        .badge-atrasada { background: #fef3c7; color: #92400e; }
-        .badge-prazo { background: #d1fae5; color: #065f46; }
-        .imunos-list { display: flex; flex-wrap: wrap; gap: 4px; }
-        .imuno-tag { background: #eff6ff; color: #1e40af; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; white-space: nowrap; }
+        .imuno-tag { display: inline-block; background: #eff6ff; color: #1e40af; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; margin: 2px; white-space: nowrap; }
         .section-title { display: flex; align-items: center; gap: 10px; margin: 24px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--primary); }
         .section-title h3 { font-size: 1.1rem; color: var(--primary); }
         .section-count { background: var(--primary); color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; }
@@ -82,8 +182,23 @@ HTML_TEMPLATE = """
         .file-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg); border-radius: 6px; font-size: 0.85rem; }
         .file-icon { color: var(--success); }
         .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+
+        /* Filtros */
+        .filters-panel { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .filters-panel h3 { font-size: 1rem; color: var(--primary); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+        .filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+        .filter-group label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; color: var(--text); }
+        .filter-group input, .filter-group select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; }
+        .filter-group input:focus, .filter-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.1); }
+        .filter-actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
+        .imunos-remove-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .imuno-remove-chip { display: inline-flex; align-items: center; gap: 4px; background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 16px; font-size: 0.8rem; cursor: pointer; }
+        .imuno-remove-chip:hover { background: #fecaca; }
+        .imuno-remove-chip .x { font-weight: bold; }
+
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .filters-grid { grid-template-columns: 1fr; }
             table { font-size: 0.75rem; }
             th, td { padding: 6px 4px; }
         }
@@ -113,7 +228,7 @@ HTML_TEMPLATE = """
             <form method="POST" enctype="multipart/form-data" id="uploadForm">
                 <div class="upload-area" id="dropZone" onclick="document.getElementById('csvFiles').click()">
                     <p style="font-size: 1.1rem; margin-bottom: 8px;">Clique ou arraste os arquivos CSV aqui</p>
-                    <p style="color: var(--text-muted); font-size: 0.85rem;">Selecione os 4 CSVs de busca ativa (atrasada/no prazo, 0-9/10-13)</p>
+                    <p style="color: var(--text-muted); font-size: 0.85rem;">Selecione os CSVs de busca ativa (atrasada/no prazo)</p>
                     <input type="file" id="csvFiles" name="csvs" multiple accept=".csv" required>
                 </div>
                 <div class="file-list" id="fileList"></div>
@@ -125,26 +240,73 @@ HTML_TEMPLATE = """
         {% else %}
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-value">{{ resultado.total_pacientes }}</div>
+                <div class="stat-value">{{ stats.total_pacientes }}</div>
                 <div class="stat-label">Pacientes Unicos</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{{ resultado.total_criancas }}</div>
+                <div class="stat-value">{{ stats.total_criancas }}</div>
                 <div class="stat-label">Criancas (0-9 anos)</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{{ resultado.total_adolescentes }}</div>
+                <div class="stat-value">{{ stats.total_adolescentes }}</div>
                 <div class="stat-label">Adolescentes (10-13)</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{{ resultado.enquadrados }}</div>
+                <div class="stat-value">{{ stats.enquadrados }}</div>
                 <div class="stat-label">Registros Enquadrados</div>
             </div>
         </div>
 
-        <div class="actions" style="margin-bottom: 24px;">
-            <a href="{{ url_for('download_csv') }}" class="btn btn-success">Baixar CSV Consolidado</a>
-            <a href="{{ url_for('index') }}" class="btn btn-outline">Nova Analise</a>
+        <!-- Painel de Filtros -->
+        <div class="filters-panel">
+            <h3>Filtros</h3>
+            <form method="GET" action="{{ url_for('index') }}" id="filterForm">
+                <div class="filters-grid">
+                    <div class="filter-group">
+                        <label for="idade_min">Idade Minima (meses)</label>
+                        <input type="number" id="idade_min" name="idade_min" value="{{ filtros.idade_min or '' }}" min="0" max="156" placeholder="Ex: 0">
+                    </div>
+                    <div class="filter-group">
+                        <label for="idade_max">Idade Maxima (meses)</label>
+                        <input type="number" id="idade_max" name="idade_max" value="{{ filtros.idade_max or '' }}" min="0" max="156" placeholder="Ex: 156">
+                    </div>
+                    <div class="filter-group">
+                        <label for="endereco">Endereco contem</label>
+                        <input type="text" id="endereco" name="endereco" value="{{ filtros.endereco or '' }}" placeholder="Ex: centro, rural...">
+                    </div>
+                    <div class="filter-group">
+                        <label for="imuno">Imuno contem</label>
+                        <input type="text" id="imuno" name="imuno" value="{{ filtros.imuno or '' }}" placeholder="Ex: polio, hepatite...">
+                    </div>
+                </div>
+
+                <!-- Imunos para remover -->
+                <div class="filter-group" style="margin-top: 16px;">
+                    <label>Remover Imunos Pendentes</label>
+                    <select id="imuno_select" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;">
+                        <option value="">Selecione um imuno para remover...</option>
+                        {% for imuno in todos_imunos %}
+                        <option value="{{ imuno }}">{{ imuno }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" class="btn btn-sm btn-outline" style="margin-top: 8px;" onclick="addImunoRemover()">+ Adicionar</button>
+                    <div class="imunos-remove-list" id="imunosRemoveList">
+                        {% for imuno in filtros.imunos_remover %}
+                        <span class="imuno-remove-chip" onclick="removeImunoRemover(this, '{{ imuno }}')">
+                            {{ imuno }} <span class="x">&times;</span>
+                        </span>
+                        {% endfor %}
+                    </div>
+                    <input type="hidden" name="imunos_remover" id="imunos_remover_input" value="{{ ','.join(filtros.imunos_remover) }}">
+                </div>
+
+                <div class="filter-actions">
+                    <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
+                    <a href="{{ url_for('index') }}" class="btn btn-outline">Limpar Filtros</a>
+                    <a href="{{ url_for('download_csv') }}" class="btn btn-success">Baixar CSV Consolidado</a>
+                    <a href="{{ url_for('nova_analise') }}" class="btn btn-outline">Nova Analise</a>
+                </div>
+            </form>
         </div>
 
         {% for grupo_key, titulo in [("criancas", "CRIANCAS (0-9 anos)"), ("adolescentes", "ADOLESCENTES (10-13 anos)")] %}
@@ -175,11 +337,9 @@ HTML_TEMPLATE = """
                         <td>{{ p.data_nascimento or "-" }}</td>
                         <td>{{ p.endereco }}</td>
                         <td>
-                            <div class="imunos-list">
-                                {% for imuno in p.imunos_pendentes %}
-                                <span class="imuno-tag">{{ imuno }}</span>
-                                {% endfor %}
-                            </div>
+                            {% for imuno in p.imunos_pendentes %}
+                            <span class="imuno-tag">{{ imuno }}</span>
+                            {% endfor %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -187,7 +347,7 @@ HTML_TEMPLATE = """
             </table>
         </div>
         {% else %}
-        <div class="card"><p>Nenhum paciente neste grupo.</p></div>
+        <div class="card"><p>Nenhum paciente neste grupo com os filtros aplicados.</p></div>
         {% endif %}
         {% endfor %}
         {% endif %}
@@ -196,6 +356,7 @@ HTML_TEMPLATE = """
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('csvFiles');
         const fileList = document.getElementById('fileList');
+
         if (dropZone) {
             ['dragenter', 'dragover'].forEach(e => {
                 dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.add('dragover'); });
@@ -209,6 +370,7 @@ HTML_TEMPLATE = """
             });
             fileInput.addEventListener('change', updateFileList);
         }
+
         function updateFileList() {
             if (!fileList) return;
             fileList.innerHTML = '';
@@ -219,19 +381,115 @@ HTML_TEMPLATE = """
                 fileList.appendChild(div);
             });
         }
+
+        // Gerenciamento de imunos para remover
+        let imunosRemover = new Set({{ filtros.imunos_remover | tojson }});
+
+        function addImunoRemover() {
+            const select = document.getElementById('imuno_select');
+            const valor = select.value;
+            if (valor && !imunosRemover.has(valor)) {
+                imunosRemover.add(valor);
+                renderImunosRemover();
+            }
+            select.value = '';
+        }
+
+        function removeImunoRemover(element, valor) {
+            imunosRemover.delete(valor);
+            renderImunosRemover();
+        }
+
+        function renderImunosRemover() {
+            const container = document.getElementById('imunosRemoveList');
+            const input = document.getElementById('imunos_remover_input');
+
+            container.innerHTML = '';
+            imunosRemover.forEach(imuno => {
+                const chip = document.createElement('span');
+                chip.className = 'imuno-remove-chip';
+                chip.onclick = function() { removeImunoRemover(this, imuno); };
+                chip.innerHTML = imuno + ' <span class="x">&times;</span>';
+                container.appendChild(chip);
+            });
+
+            input.value = Array.from(imunosRemover).join(',');
+        }
     </script>
 </body>
 </html>
 """
 
-# Armazena resultado da ultima analise em memoria (sessao unica)
-_ultimo_resultado = None
-_ultimo_csv_path = None
-
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template_string(HTML_TEMPLATE, resultado=_ultimo_resultado)
+    global _ultimo_resultado
+
+    if not _ultimo_resultado:
+        return render_template_string(HTML_TEMPLATE, resultado=None, filtros={}, stats={}, todos_imunos=[])
+
+    # Obter parametros de filtro
+    filtros = {
+        "idade_min": int(request.args.get("idade_min")) if request.args.get("idade_min") else None,
+        "idade_max": int(request.args.get("idade_max")) if request.args.get("idade_max") else None,
+        "endereco": request.args.get("endereco", ""),
+        "imuno": request.args.get("imuno", ""),
+        "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
+    }
+
+    # Aplicar unificacao de imunos e filtros
+    pacientes_unificados = []
+    todos_imunos_set = set()
+
+    for grupo_key in ("criancas", "adolescentes"):
+        for p in _ultimo_resultado.get(grupo_key, []):
+            p_copia = dict(p)
+            # Unificar imunos
+            p_copia["imunos_pendentes"] = _unificar_imunos(p.get("imunos_pendentes", []))
+            pacientes_unificados.append(p_copia)
+            # Coletar todos os imunos para o dropdown
+            for imuno in p_copia["imunos_pendentes"]:
+                # Extrair nome base do imuno
+                match = re.match(r'^([^(]+?)(?:\s*\(|$)', imuno.strip())
+                if match:
+                    todos_imunos_set.add(match.group(1).strip())
+
+    # Aplicar filtros
+    pacientes_filtrados = _aplicar_filtros(pacientes_unificados, filtros)
+
+    # Separar por grupo etario novamente
+    criancas = [p for p in pacientes_filtrados if p.get("grupo_etario") == "Crianca"]
+    adolescentes = [p for p in pacientes_filtrados if p.get("grupo_etario") == "Adolescente"]
+
+    resultado_filtrado = {
+        "criancas": criancas,
+        "adolescentes": adolescentes,
+    }
+
+    stats = {
+        "total_pacientes": len(pacientes_filtrados),
+        "total_criancas": len(criancas),
+        "total_adolescentes": len(adolescentes),
+        "enquadrados": _ultimo_resultado.get("enquadrados", 0),
+    }
+
+    todos_imunos = sorted(todos_imunos_set)
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        resultado=resultado_filtrado,
+        filtros=filtros,
+        stats=stats,
+        todos_imunos=todos_imunos,
+    )
+
+
+@app.route("/nova-analise")
+def nova_analise():
+    global _ultimo_resultado, _ultimo_csv_path
+    _ultimo_resultado = None
+    _ultimo_csv_path = None
+    return redirect(url_for("index"))
 
 
 @app.route("/", methods=["POST"])
@@ -246,17 +504,9 @@ def analisar_upload():
     # Cria pasta temporaria para os CSVs desta analise
     session_dir = tempfile.mkdtemp(prefix="kode_vacinas_session_", dir=UPLOAD_FOLDER)
 
-    nomes_esperados = [
-        "atrasada 0 a 9.csv",
-        "atrasada 10 a 13.csv",
-        "no prazo 0 a 9.csv",
-        "no prazo 10 a 13.csv",
-    ]
-
     for f in files:
         if f.filename == "":
             continue
-        # Tenta mapear para nome esperado ou usa nome original
         nome_destino = f.filename
         f.save(os.path.join(session_dir, nome_destino))
 
@@ -288,7 +538,6 @@ def analisar_upload():
         # Exporta CSV consolidado para download
         csv_path = os.path.join(session_dir, "resultado_consolidado.csv")
         exportar_csv(resultado, csv_path)
-        global _ultimo_csv_path
         _ultimo_csv_path = csv_path
 
         flash(
