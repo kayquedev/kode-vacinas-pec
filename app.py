@@ -156,7 +156,12 @@ def _agrupar_por_logradouro_bairro(pacientes):
 
 
 def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
-    """Gera HTML formatado para conversao em PDF."""
+    """Gera HTML formatado para conversao em PDF via xhtml2pdf.
+    Usa apenas CSS compativel: sem flexbox, grid, border-radius ou nth-child.
+    Layout baseado em tables para compatibilidade maxima.
+    """
+    total_no_relatorio = sum(len(v) for v in pacientes_agrupados.values())
+
     html = f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -166,109 +171,95 @@ def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
 @page {{
     size: A4 landscape;
     margin: 1.5cm;
-    @bottom-center {{
-        content: "Pagina " counter(page) " de " counter(pages);
-        font-size: 9px;
-        color: #64748b;
-    }}
 }}
 body {{
-    font-family: 'Segoe UI', Arial, sans-serif;
-    font-size: 10px;
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 9px;
     color: #1e293b;
-    line-height: 1.4;
+    line-height: 1.3;
 }}
 .header {{
-    background: #0e7490;
+    background-color: #0e7490;
     color: white;
-    padding: 15px 20px;
-    border-radius: 8px;
-    margin-bottom: 20px;
-    page-break-after: avoid;
+    padding: 12px 15px;
+    margin-bottom: 15px;
+    -pdf-keep-with-next: true;
 }}
 .header h1 {{
-    font-size: 18px;
-    margin: 0 0 5px 0;
+    font-size: 16px;
+    margin: 0 0 3px 0;
+    color: white;
 }}
 .header .subtitle {{
-    font-size: 11px;
-    opacity: 0.9;
+    font-size: 10px;
+    color: #e0f2fe;
 }}
-.stats-row {{
-    display: flex;
-    gap: 15px;
-    margin-bottom: 20px;
-    page-break-after: avoid;
+.stats-table {{
+    width: 100%;
+    margin-bottom: 15px;
+    border-collapse: collapse;
+    -pdf-keep-with-next: true;
 }}
-.stat-box {{
-    background: #f0f9ff;
+.stats-table td {{
+    background-color: #f0f9ff;
     border: 1px solid #bae6fd;
-    border-radius: 6px;
-    padding: 10px 15px;
+    padding: 8px 10px;
     text-align: center;
-    flex: 1;
+    width: 25%;
 }}
 .stat-value {{
-    font-size: 20px;
-    font-weight: 700;
+    font-size: 18px;
+    font-weight: bold;
     color: #0e7490;
 }}
 .stat-label {{
-    font-size: 9px;
+    font-size: 8px;
     color: #64748b;
     margin-top: 2px;
 }}
-.grupo-section {{
-    margin-bottom: 25px;
-    page-break-inside: avoid;
-}}
 .grupo-header {{
-    background: #f0fdf4;
-    border-left: 4px solid #059669;
-    padding: 8px 12px;
-    margin-bottom: 10px;
-    font-size: 12px;
-    font-weight: 600;
+    background-color: #f0fdf4;
+    border-left: 3px solid #059669;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    margin-top: 15px;
+    font-size: 11px;
+    font-weight: bold;
     color: #065f46;
-    page-break-after: avoid;
+    -pdf-keep-with-next: true;
 }}
-table {{
+table.dados {{
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 15px;
-    font-size: 9px;
+    margin-bottom: 10px;
+    font-size: 8px;
 }}
-th {{
-    background: #f1f5f9;
-    padding: 6px 8px;
+table.dados th {{
+    background-color: #f1f5f9;
+    padding: 5px 6px;
     text-align: left;
-    font-weight: 600;
+    font-weight: bold;
     border-bottom: 2px solid #cbd5e1;
     color: #334155;
 }}
-td {{
-    padding: 5px 8px;
+table.dados td {{
+    padding: 4px 6px;
     border-bottom: 1px solid #e2e8f0;
     vertical-align: top;
 }}
-tr:nth-child(even) {{
-    background: #f8fafc;
-}}
 .imuno-tag {{
-    display: inline-block;
-    background: #eff6ff;
+    display: inline;
+    background-color: #eff6ff;
     color: #1e40af;
-    padding: 2px 5px;
-    border-radius: 3px;
-    font-size: 8px;
-    margin: 1px;
-    white-space: nowrap;
+    padding: 1px 4px;
+    font-size: 7px;
+    margin-right: 2px;
 }}
 .footer {{
-    margin-top: 30px;
-    padding-top: 10px;
+    margin-top: 20px;
+    padding-top: 8px;
     border-top: 1px solid #e2e8f0;
-    font-size: 8px;
+    font-size: 7px;
     color: #94a3b8;
     text-align: center;
 }}
@@ -280,66 +271,69 @@ tr:nth-child(even) {{
     <div class="subtitle">Calendario PNI 2026 | Gerado em {data_analise}</div>
 </div>
 
-<div class="stats-row">
-    <div class="stat-box">
-        <div class="stat-value">{stats.get('total_pacientes', 0)}</div>
-        <div class="stat-label">Pacientes</div>
-    </div>
-    <div class="stat-box">
-        <div class="stat-value">{stats.get('total_criancas', 0)}</div>
-        <div class="stat-label">Criancas</div>
-    </div>
-    <div class="stat-box">
-        <div class="stat-value">{stats.get('total_adolescentes', 0)}</div>
-        <div class="stat-label">Adolescentes</div>
-    </div>
-    <div class="stat-box">
-        <div class="stat-value">{sum(len(v) for v in pacientes_agrupados.values())}</div>
-        <div class="stat-label">No Relatorio</div>
-    </div>
-</div>
+<table class="stats-table">
+    <tr>
+        <td>
+            <div class="stat-value">{stats.get('total_pacientes', 0)}</div>
+            <div class="stat-label">Pacientes</div>
+        </td>
+        <td>
+            <div class="stat-value">{stats.get('total_criancas', 0)}</div>
+            <div class="stat-label">Criancas</div>
+        </td>
+        <td>
+            <div class="stat-value">{stats.get('total_adolescentes', 0)}</div>
+            <div class="stat-label">Adolescentes</div>
+        </td>
+        <td>
+            <div class="stat-value">{total_no_relatorio}</div>
+            <div class="stat-label">No Relatorio</div>
+        </td>
+    </tr>
+</table>
 """
 
     for grupo_nome, pacientes in pacientes_agrupados.items():
         html += f"""
-<div class="grupo-section">
-    <div class="grupo-header">{grupo_nome} ({len(pacientes)} pacientes)</div>
-    <table>
-        <thead>
-            <tr>
-                <th style="width: 22%;">Nome Paciente</th>
-                <th style="width: 12%;">CPF/CNS</th>
-                <th style="width: 12%;">Idade</th>
-                <th style="width: 10%;">D/N</th>
-                <th style="width: 44%;">Imunos Pendentes</th>
-            </tr>
-        </thead>
-        <tbody>
+<div class="grupo-header">{grupo_nome} ({len(pacientes)} pacientes)</div>
+<table class="dados">
+    <thead>
+        <tr>
+            <th style="width: 22%;">Nome Paciente</th>
+            <th style="width: 12%;">CPF/CNS</th>
+            <th style="width: 13%;">Idade</th>
+            <th style="width: 9%;">D/N</th>
+            <th style="width: 44%;">Imunos Pendentes</th>
+        </tr>
+    </thead>
+    <tbody>
 """
         for p in pacientes:
-            imunos_html = "".join(
+            imunos_html = " ".join(
                 f'<span class="imuno-tag">{im}</span>'
                 for im in p.get("imunos_pendentes", [])
             )
             dn = (p.get("data_nascimento") or "-")[:10]
+            nome = p.get('nome', '')
+            ident = p.get('identificador', '-')
+            idade = p.get('idade_texto', '-')
             html += f"""
-            <tr>
-                <td><strong>{p.get('nome', '')}</strong></td>
-                <td>{p.get('identificador', '-')}</td>
-                <td>{p.get('idade_texto', '-')}</td>
-                <td>{dn}</td>
-                <td>{imunos_html}</td>
-            </tr>
+        <tr>
+            <td><b>{nome}</b></td>
+            <td>{ident}</td>
+            <td>{idade}</td>
+            <td>{dn}</td>
+            <td>{imunos_html}</td>
+        </tr>
 """
         html += """
-        </tbody>
-    </table>
-</div>
+    </tbody>
+</table>
 """
 
     html += f"""
 <div class="footer">
-    Kode Vacinas PEC - Analisador de Vacinacao e-SUS PEC x Calendario PNI 2026<br>
+    Kode Vacinas PEC - Analisador de Vacinacao e-SUS PEC x Calendario PNI 2026<br/>
     Documento gerado automaticamente em {data_analise}
 </div>
 </body>
@@ -841,11 +835,16 @@ def download_pdf():
     pdf_html = _gerar_pdf_html(pacientes_agrupados, stats, date.today().isoformat())
 
     try:
-        from weasyprint import HTML
-        pdf_bytes = HTML(string=pdf_html).write_pdf()
+        from xhtml2pdf import pisa
+        pdf_buffer = io.BytesIO()
+        pisa_status = pisa.CreatePDF(pdf_html, dest=pdf_buffer)
+        if pisa_status.err:
+            flash("Erro ao gerar PDF. Retornando HTML para impressao.", "warning")
+            return pdf_html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        pdf_bytes = pdf_buffer.getvalue()
     except ImportError:
-        # Fallback: retorna HTML direto se WeasyPrint nao estiver instalado
-        flash("WeasyPrint nao instalado no servidor. Retornando HTML para impressao.", "warning")
+        # Fallback: retorna HTML direto se xhtml2pdf nao estiver instalado
+        flash("xhtml2pdf nao instalado no servidor. Retornando HTML para impressao.", "warning")
         return pdf_html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
     return send_file(
