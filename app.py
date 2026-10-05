@@ -4,8 +4,9 @@ Kode Vacinas PEC - Interface Web
 =================================
 Aplicacao Flask para upload e analise de CSVs do e-SUS PEC,
 cruzando com o Calendario PNI 2026. Gera relatorio consolidado
-por paciente no estilo Kode APS, com unificacao de imunos e
-filtros interativos.
+por paciente no estilo Kode APS, com unificacao de imunos,
+filtros interativos e exportacao PDF com separacao por
+logradouro/bairro.
 
 Deploy: vacinas.kodesaude.com.br
 """
@@ -14,7 +15,7 @@ import json
 import os
 import re
 import tempfile
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from datetime import date
 from flask import Flask, render_template_string, request, send_file, flash, redirect, url_for, jsonify
 
@@ -32,25 +33,15 @@ _ultimo_csv_path = None
 
 
 def _unificar_imunos(imunos_pendentes):
-    """Unifica imunos iguais agrupando doses entre parenteses.
-
-    Exemplo de entrada:
-        ['poliomielite (D1) [Atrasada]', 'poliomielite (D2) [Atrasada]',
-         'meningo C (D1) [No prazo]']
-
-    Saida:
-        ['poliomielite (D1, D2)', 'meningo C (D1)']
-    """
+    """Unifica imunos iguais agrupando doses entre parenteses."""
     if not imunos_pendentes:
         return []
 
     grupos = OrderedDict()
     for imuno_str in imunos_pendentes:
-        # Extrai nome base (antes do primeiro parentese ou colchete)
         match = re.match(r'^([^([]+?)(?:\s*\(|\s*\[|$)', imuno_str.strip())
         nome_base = match.group(1).strip() if match else imuno_str.strip()
 
-        # Extrai dose (entre parenteses)
         dose_match = re.search(r'\(([^)]+)\)', imuno_str)
         dose = dose_match.group(1).strip() if dose_match else ""
 
@@ -69,6 +60,40 @@ def _unificar_imunos(imunos_pendentes):
     return resultado
 
 
+def _extrair_logradouro_bairro(endereco):
+    """Extrai logradouro e bairro de um endereco completo.
+
+    Retorna tupla (logradouro, bairro) normalizados.
+    Exemplos de entrada:
+        'Rua Esmeralda, 218, BONFIM' -> ('Esmeralda', 'Bonfim')
+        'Estrada Br 262, S/N, GRANJA VANELIA' -> ('Br 262', 'Granja Vanelia')
+        'Area Lagoinha, S/N, FAZENDA IMBIRICU' -> ('Lagoinha', 'Fazenda Imbiricu')
+    """
+    if not endereco or endereco == "-":
+        return ("Sem endereco", "Sem bairro")
+
+    partes = [p.strip() for p in endereco.split(",") if p.strip()]
+
+    logradouro = "Sem logradouro"
+    bairro = "Sem bairro"
+
+    if len(partes) >= 1:
+        log_raw = partes[0]
+        # Remove prefixos comuns
+        log_raw = re.sub(r'^(rua|avenida|av\.?|estrada|praca|travessa|alameda|rodovia)\s+', '', log_raw, flags=re.IGNORECASE)
+        logradouro = log_raw.strip().title() if log_raw.strip() else "Sem logradouro"
+
+    if len(partes) >= 3:
+        bairro = partes[-1].strip().title()
+    elif len(partes) >= 2:
+        # Se so tem 2 partes, a ultima pode ser bairro ou numero
+        ultima = partes[-1].strip()
+        if not re.match(r'^\d+', ultima) and ultima.upper() not in ('S/N', 'SN', 'CASA', 'APARTAMENTO'):
+            bairro = ultima.title()
+
+    return (logradouro, bairro)
+
+
 def _aplicar_filtros(pacientes, filtros):
     """Aplica filtros na lista de pacientes."""
     if not filtros:
@@ -82,7 +107,6 @@ def _aplicar_filtros(pacientes, filtros):
     imunos_remover = filtros.get("imunos_remover", [])
 
     for p in pacientes:
-        # Filtro faixa etaria
         if idade_min is not None or idade_max is not None:
             idade_m = p.get("idade_meses")
             if idade_m is not None:
@@ -91,29 +115,24 @@ def _aplicar_filtros(pacientes, filtros):
                 if idade_max is not None and idade_m > idade_max:
                     continue
 
-        # Filtro endereco
         if endereco_busca:
             if endereco_busca not in (p.get("endereco") or "").lower():
                 continue
 
-        # Filtrar imunos pendentes
         imunos_filtrados = list(p.get("imunos_pendentes", []))
 
-        # Remover imunos selecionados
         if imunos_remover:
             imunos_filtrados = [
                 i for i in imunos_filtrados
                 if not any(rem.lower() in i.lower() for rem in imunos_remover)
             ]
 
-        # Filtro por imuno especifico
         if imuno_busca:
             imunos_filtrados = [
                 i for i in imunos_filtrados
                 if imuno_busca in i.lower()
             ]
 
-        # So inclui paciente se ainda tem imunos pendentes apos filtros
         if imunos_filtrados:
             p_copia = dict(p)
             p_copia["imunos_pendentes"] = imunos_filtrados
@@ -123,299 +142,515 @@ def _aplicar_filtros(pacientes, filtros):
     return resultado
 
 
+def _agrupar_por_logradouro_bairro(pacientes):
+    """Agrupa pacientes por logradouro e bairro para o PDF."""
+    grupos = defaultdict(list)
+    for p in pacientes:
+        endereco = p.get("endereco", "")
+        logradouro, bairro = _extrair_logradouro_bairro(endereco)
+        chave = f"{bairro} - {logradouro}"
+        grupos[chave].append(p)
+
+    # Ordena por bairro e depois por logradouro
+    return OrderedDict(sorted(grupos.items()))
+
+
+def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
+    """Gera HTML formatado para conversao em PDF."""
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Relatorio de Vacinacao - Kode Vacinas PEC</title>
+<style>
+@page {{
+    size: A4 landscape;
+    margin: 1.5cm;
+    @bottom-center {{
+        content: "Pagina " counter(page) " de " counter(pages);
+        font-size: 9px;
+        color: #64748b;
+    }}
+}}
+body {{
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 10px;
+    color: #1e293b;
+    line-height: 1.4;
+}}
+.header {{
+    background: #0e7490;
+    color: white;
+    padding: 15px 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    page-break-after: avoid;
+}}
+.header h1 {{
+    font-size: 18px;
+    margin: 0 0 5px 0;
+}}
+.header .subtitle {{
+    font-size: 11px;
+    opacity: 0.9;
+}}
+.stats-row {{
+    display: flex;
+    gap: 15px;
+    margin-bottom: 20px;
+    page-break-after: avoid;
+}}
+.stat-box {{
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    padding: 10px 15px;
+    text-align: center;
+    flex: 1;
+}}
+.stat-value {{
+    font-size: 20px;
+    font-weight: 700;
+    color: #0e7490;
+}}
+.stat-label {{
+    font-size: 9px;
+    color: #64748b;
+    margin-top: 2px;
+}}
+.grupo-section {{
+    margin-bottom: 25px;
+    page-break-inside: avoid;
+}}
+.grupo-header {{
+    background: #f0fdf4;
+    border-left: 4px solid #059669;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #065f46;
+    page-break-after: avoid;
+}}
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 15px;
+    font-size: 9px;
+}}
+th {{
+    background: #f1f5f9;
+    padding: 6px 8px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid #cbd5e1;
+    color: #334155;
+}}
+td {{
+    padding: 5px 8px;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: top;
+}}
+tr:nth-child(even) {{
+    background: #f8fafc;
+}}
+.imuno-tag {{
+    display: inline-block;
+    background: #eff6ff;
+    color: #1e40af;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 8px;
+    margin: 1px;
+    white-space: nowrap;
+}}
+.footer {{
+    margin-top: 30px;
+    padding-top: 10px;
+    border-top: 1px solid #e2e8f0;
+    font-size: 8px;
+    color: #94a3b8;
+    text-align: center;
+}}
+</style>
+</head>
+<body>
+<div class="header">
+    <h1>Kode Vacinas PEC - Relatorio de Vacinacao</h1>
+    <div class="subtitle">Calendario PNI 2026 | Gerado em {data_analise}</div>
+</div>
+
+<div class="stats-row">
+    <div class="stat-box">
+        <div class="stat-value">{stats.get('total_pacientes', 0)}</div>
+        <div class="stat-label">Pacientes</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value">{stats.get('total_criancas', 0)}</div>
+        <div class="stat-label">Criancas</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value">{stats.get('total_adolescentes', 0)}</div>
+        <div class="stat-label">Adolescentes</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value">{sum(len(v) for v in pacientes_agrupados.values())}</div>
+        <div class="stat-label">No Relatorio</div>
+    </div>
+</div>
+"""
+
+    for grupo_nome, pacientes in pacientes_agrupados.items():
+        html += f"""
+<div class="grupo-section">
+    <div class="grupo-header">{grupo_nome} ({len(pacientes)} pacientes)</div>
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 22%;">Nome Paciente</th>
+                <th style="width: 12%;">CPF/CNS</th>
+                <th style="width: 12%;">Idade</th>
+                <th style="width: 10%;">D/N</th>
+                <th style="width: 44%;">Imunos Pendentes</th>
+            </tr>
+        </thead>
+        <tbody>
+"""
+        for p in pacientes:
+            imunos_html = "".join(
+                f'<span class="imuno-tag">{im}</span>'
+                for im in p.get("imunos_pendentes", [])
+            )
+            dn = (p.get("data_nascimento") or "-")[:10]
+            html += f"""
+            <tr>
+                <td><strong>{p.get('nome', '')}</strong></td>
+                <td>{p.get('identificador', '-')}</td>
+                <td>{p.get('idade_texto', '-')}</td>
+                <td>{dn}</td>
+                <td>{imunos_html}</td>
+            </tr>
+"""
+        html += """
+        </tbody>
+    </table>
+</div>
+"""
+
+    html += f"""
+<div class="footer">
+    Kode Vacinas PEC - Analisador de Vacinacao e-SUS PEC x Calendario PNI 2026<br>
+    Documento gerado automaticamente em {data_analise}
+</div>
+</body>
+</html>
+"""
+    return html
+
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kode Vacinas PEC - Analisador de Vacinacao</title>
-    <style>
-        :root {
-            --primary: #0e7490;
-            --primary-dark: #0c5f75;
-            --bg: #f8fafc;
-            --card-bg: #ffffff;
-            --text: #1e293b;
-            --text-muted: #64748b;
-            --border: #e2e8f0;
-            --success: #059669;
-            --warning: #d97706;
-            --danger: #dc2626;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        header { background: var(--primary); color: white; padding: 20px 0; margin-bottom: 30px; }
-        header .container { display: flex; align-items: center; gap: 15px; }
-        header h1 { font-size: 1.5rem; font-weight: 600; }
-        header .subtitle { opacity: 0.9; font-size: 0.9rem; }
-        .card { background: var(--card-bg); border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .card h2 { font-size: 1.2rem; margin-bottom: 16px; color: var(--primary); }
-        .upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 40px; text-align: center; transition: all 0.2s; cursor: pointer; }
-        .upload-area:hover, .upload-area.dragover { border-color: var(--primary); background: #f0f9ff; }
-        .upload-area input[type="file"] { display: none; }
-        .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-size: 0.9rem; }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-dark); }
-        .btn-success { background: var(--success); color: white; }
-        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
-        .btn-outline:hover { background: var(--bg); }
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-        .stat-card { background: var(--bg); border-radius: 8px; padding: 16px; text-align: center; }
-        .stat-value { font-size: 2rem; font-weight: 700; color: var(--primary); }
-        .stat-label { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
-        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        th { background: var(--bg); padding: 12px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 10; }
-        td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-        tr:hover { background: #f8fafc; }
-        .imuno-tag { display: inline-block; background: #eff6ff; color: #1e40af; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; margin: 2px; white-space: nowrap; }
-        .section-title { display: flex; align-items: center; gap: 10px; margin: 24px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--primary); }
-        .section-title h3 { font-size: 1.1rem; color: var(--primary); }
-        .section-count { background: var(--primary); color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; }
-        .alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
-        .alert-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
-        .alert-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
-        .file-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
-        .file-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg); border-radius: 6px; font-size: 0.85rem; }
-        .file-icon { color: var(--success); }
-        .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
-
-        /* Filtros */
-        .filters-panel { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .filters-panel h3 { font-size: 1rem; color: var(--primary); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-        .filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
-        .filter-group label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; color: var(--text); }
-        .filter-group input, .filter-group select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; }
-        .filter-group input:focus, .filter-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.1); }
-        .filter-actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
-        .imunos-remove-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-        .imuno-remove-chip { display: inline-flex; align-items: center; gap: 4px; background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 16px; font-size: 0.8rem; cursor: pointer; }
-        .imuno-remove-chip:hover { background: #fecaca; }
-        .imuno-remove-chip .x { font-weight: bold; }
-
-        @media (max-width: 768px) {
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .filters-grid { grid-template-columns: 1fr; }
-            table { font-size: 0.75rem; }
-            th, td { padding: 6px 4px; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kode Vacinas PEC - Analisador de Vacinacao</title>
+<style>
+:root {
+--primary: #0e7490;
+--primary-dark: #0c5f75;
+--bg: #f8fafc;
+--card-bg: #ffffff;
+--text: #1e293b;
+--text-muted: #64748b;
+--border: #e2e8f0;
+--success: #059669;
+--warning: #d97706;
+--danger: #dc2626;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+header { background: var(--primary); color: white; padding: 20px 0; margin-bottom: 30px; }
+header .container { display: flex; align-items: center; gap: 15px; }
+header h1 { font-size: 1.5rem; font-weight: 600; }
+header .subtitle { opacity: 0.9; font-size: 0.9rem; }
+.card { background: var(--card-bg); border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.card h2 { font-size: 1.2rem; margin-bottom: 16px; color: var(--primary); }
+.upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 40px; text-align: center; transition: all 0.2s; cursor: pointer; }
+.upload-area:hover, .upload-area.dragover { border-color: var(--primary); background: #f0f9ff; }
+.upload-area input[type="file"] { display: none; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-size: 0.9rem; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-success { background: var(--success); color: white; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-outline:hover { background: var(--bg); }
+.btn-danger { background: var(--danger); color: white; }
+.btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+.btn-pdf { background: #7c3aed; color: white; }
+.btn-pdf:hover { background: #6d28d9; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.stat-card { background: var(--bg); border-radius: 8px; padding: 16px; text-align: center; }
+.stat-value { font-size: 2rem; font-weight: 700; color: var(--primary); }
+.stat-label { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th { background: var(--bg); padding: 12px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 10; }
+td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:hover { background: #f8fafc; }
+.imuno-tag { display: inline-block; background: #eff6ff; color: #1e40af; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; margin: 2px; white-space: nowrap; }
+.section-title { display: flex; align-items: center; gap: 10px; margin: 24px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--primary); }
+.section-title h3 { font-size: 1.1rem; color: var(--primary); }
+.section-count { background: var(--primary); color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; }
+.alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+.alert-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.alert-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+.file-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.file-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg); border-radius: 6px; font-size: 0.85rem; }
+.file-icon { color: var(--success); }
+.actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.filters-panel { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.filters-panel h3 { font-size: 1rem; color: var(--primary); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.filter-group label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; color: var(--text); }
+.filter-group input, .filter-group select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; }
+.filter-group input:focus, .filter-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.1); }
+.filter-actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
+.imunos-remove-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.imuno-remove-chip { display: inline-flex; align-items: center; gap: 4px; background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 16px; font-size: 0.8rem; cursor: pointer; }
+.imuno-remove-chip:hover { background: #fecaca; }
+.imuno-remove-chip .x { font-weight: bold; }
+.checkbox-group { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.checkbox-group input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); }
+.checkbox-group label { margin-bottom: 0; cursor: pointer; }
+@media (max-width: 768px) {
+.stats-grid { grid-template-columns: repeat(2, 1fr); }
+.filters-grid { grid-template-columns: 1fr; }
+table { font-size: 0.75rem; }
+th, td { padding: 6px 4px; }
+}
+</style>
 </head>
 <body>
-    <header>
-        <div class="container">
-            <div>
-                <h1>Kode Vacinas PEC</h1>
-                <div class="subtitle">Analisador de Vacinacao e-SUS PEC x Calendario PNI 2026</div>
-            </div>
-        </div>
-    </header>
-    <div class="container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-        {% for category, message in messages %}
-        <div class="alert alert-{{ category }}">{{ message }}</div>
-        {% endfor %}
-        {% endif %}
-        {% endwith %}
+<header>
+<div class="container">
+<div>
+<h1>Kode Vacinas PEC</h1>
+<div class="subtitle">Analisador de Vacinacao e-SUS PEC x Calendario PNI 2026</div>
+</div>
+</div>
+</header>
+<div class="container">
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for category, message in messages %}
+<div class="alert alert-{{ category }}">{{ message }}</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
 
-        {% if not resultado %}
-        <div class="card">
-            <h2>Upload dos CSVs do e-SUS PEC</h2>
-            <form method="POST" enctype="multipart/form-data" id="uploadForm">
-                <div class="upload-area" id="dropZone" onclick="document.getElementById('csvFiles').click()">
-                    <p style="font-size: 1.1rem; margin-bottom: 8px;">Clique ou arraste os arquivos CSV aqui</p>
-                    <p style="color: var(--text-muted); font-size: 0.85rem;">Selecione os CSVs de busca ativa (atrasada/no prazo)</p>
-                    <input type="file" id="csvFiles" name="csvs" multiple accept=".csv" required>
-                </div>
-                <div class="file-list" id="fileList"></div>
-                <div class="actions">
-                    <button type="submit" class="btn btn-primary" id="analyzeBtn">Analisar Vacinas</button>
-                </div>
-            </form>
-        </div>
-        {% else %}
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value">{{ stats.total_pacientes }}</div>
-                <div class="stat-label">Pacientes Unicos</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{{ stats.total_criancas }}</div>
-                <div class="stat-label">Criancas (0-9 anos)</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{{ stats.total_adolescentes }}</div>
-                <div class="stat-label">Adolescentes (10-13)</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{{ stats.enquadrados }}</div>
-                <div class="stat-label">Registros Enquadrados</div>
-            </div>
-        </div>
+{% if not resultado %}
+<div class="card">
+<h2>Upload dos CSVs do e-SUS PEC</h2>
+<form method="POST" enctype="multipart/form-data" id="uploadForm">
+<div class="upload-area" id="dropZone" onclick="document.getElementById('csvFiles').click()">
+<p style="font-size: 1.1rem; margin-bottom: 8px;">Clique ou arraste os arquivos CSV aqui</p>
+<p style="color: var(--text-muted); font-size: 0.85rem;">Selecione os CSVs de busca ativa (atrasada/no prazo)</p>
+<input type="file" id="csvFiles" name="csvs" multiple accept=".csv" required>
+</div>
+<div class="file-list" id="fileList"></div>
+<div class="actions">
+<button type="submit" class="btn btn-primary" id="analyzeBtn">Analisar Vacinas</button>
+</div>
+</form>
+</div>
+{% else %}
+<div class="stats-grid">
+<div class="stat-card">
+<div class="stat-value">{{ stats.total_pacientes }}</div>
+<div class="stat-label">Pacientes Unicos</div>
+</div>
+<div class="stat-card">
+<div class="stat-value">{{ stats.total_criancas }}</div>
+<div class="stat-label">Criancas (0-9 anos)</div>
+</div>
+<div class="stat-card">
+<div class="stat-value">{{ stats.total_adolescentes }}</div>
+<div class="stat-label">Adolescentes (10-13)</div>
+</div>
+<div class="stat-card">
+<div class="stat-value">{{ stats.enquadrados }}</div>
+<div class="stat-label">Registros Enquadrados</div>
+</div>
+</div>
 
-        <!-- Painel de Filtros -->
-        <div class="filters-panel">
-            <h3>Filtros</h3>
-            <form method="GET" action="{{ url_for('index') }}" id="filterForm">
-                <div class="filters-grid">
-                    <div class="filter-group">
-                        <label for="idade_min">Idade Minima (meses)</label>
-                        <input type="number" id="idade_min" name="idade_min" value="{{ filtros.idade_min or '' }}" min="0" max="156" placeholder="Ex: 0">
-                    </div>
-                    <div class="filter-group">
-                        <label for="idade_max">Idade Maxima (meses)</label>
-                        <input type="number" id="idade_max" name="idade_max" value="{{ filtros.idade_max or '' }}" min="0" max="156" placeholder="Ex: 156">
-                    </div>
-                    <div class="filter-group">
-                        <label for="endereco">Endereco contem</label>
-                        <input type="text" id="endereco" name="endereco" value="{{ filtros.endereco or '' }}" placeholder="Ex: centro, rural...">
-                    </div>
-                    <div class="filter-group">
-                        <label for="imuno">Imuno contem</label>
-                        <input type="text" id="imuno" name="imuno" value="{{ filtros.imuno or '' }}" placeholder="Ex: polio, hepatite...">
-                    </div>
-                </div>
+<!-- Painel de Filtros -->
+<div class="filters-panel">
+<h3>Filtros e Exportacao</h3>
+<form method="GET" action="{{ url_for('index') }}" id="filterForm">
+<div class="filters-grid">
+<div class="filter-group">
+<label for="idade_min">Idade Minima (meses)</label>
+<input type="number" id="idade_min" name="idade_min" value="{{ filtros.idade_min or '' }}" min="0" max="156" placeholder="Ex: 0">
+</div>
+<div class="filter-group">
+<label for="idade_max">Idade Maxima (meses)</label>
+<input type="number" id="idade_max" name="idade_max" value="{{ filtros.idade_max or '' }}" min="0" max="156" placeholder="Ex: 156">
+</div>
+<div class="filter-group">
+<label for="endereco">Endereco contem</label>
+<input type="text" id="endereco" name="endereco" value="{{ filtros.endereco or '' }}" placeholder="Ex: centro, rural...">
+</div>
+<div class="filter-group">
+<label for="imuno">Imuno contem</label>
+<input type="text" id="imuno" name="imuno" value="{{ filtros.imuno or '' }}" placeholder="Ex: polio, hepatite...">
+</div>
+</div>
 
-                <!-- Imunos para remover -->
-                <div class="filter-group" style="margin-top: 16px;">
-                    <label>Remover Imunos Pendentes</label>
-                    <select id="imuno_select" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;">
-                        <option value="">Selecione um imuno para remover...</option>
-                        {% for imuno in todos_imunos %}
-                        <option value="{{ imuno }}">{{ imuno }}</option>
-                        {% endfor %}
-                    </select>
-                    <button type="button" class="btn btn-sm btn-outline" style="margin-top: 8px;" onclick="addImunoRemover()">+ Adicionar</button>
-                    <div class="imunos-remove-list" id="imunosRemoveList">
-                        {% for imuno in filtros.imunos_remover %}
-                        <span class="imuno-remove-chip" onclick="removeImunoRemover(this, '{{ imuno }}')">
-                            {{ imuno }} <span class="x">&times;</span>
-                        </span>
-                        {% endfor %}
-                    </div>
-                    <input type="hidden" name="imunos_remover" id="imunos_remover_input" value="{{ ','.join(filtros.imunos_remover) }}">
-                </div>
+<!-- Imunos para remover -->
+<div class="filter-group" style="margin-top: 16px;">
+<label>Remover Imunos Pendentes</label>
+<select id="imuno_select" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;">
+<option value="">Selecione um imuno para remover...</option>
+{% for imuno in todos_imunos %}
+<option value="{{ imuno }}">{{ imuno }}</option>
+{% endfor %}
+</select>
+<button type="button" class="btn btn-sm btn-outline" style="margin-top: 8px;" onclick="addImunoRemover()">+ Adicionar</button>
+<div class="imunos-remove-list" id="imunosRemoveList">
+{% for imuno in filtros.imunos_remover %}
+<span class="imuno-remove-chip" onclick="removeImunoRemover(this, '{{ imuno }}')">
+{{ imuno }} <span class="x">&times;</span>
+</span>
+{% endfor %}
+</div>
+<input type="hidden" name="imunos_remover" id="imunos_remover_input" value="{{ ','.join(filtros.imunos_remover) }}">
+</div>
 
-                <div class="filter-actions">
-                    <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
-                    <a href="{{ url_for('index') }}" class="btn btn-outline">Limpar Filtros</a>
-                    <a href="{{ url_for('download_csv') }}" class="btn btn-success">Baixar CSV Consolidado</a>
-                    <a href="{{ url_for('nova_analise') }}" class="btn btn-outline">Nova Analise</a>
-                </div>
-            </form>
-        </div>
+<!-- Opcao de separar por logradouro/bairro no PDF -->
+<div class="filter-group" style="margin-top: 16px;">
+<div class="checkbox-group">
+<input type="checkbox" id="separar_endereco" name="separar_endereco" value="1" {{ 'checked' if filtros.separar_endereco else '' }}>
+<label for="separar_endereco">Separar por Logradouro/Bairro no PDF</label>
+</div>
+</div>
 
-        {% for grupo_key, titulo in [("criancas", "CRIANCAS (0-9 anos)"), ("adolescentes", "ADOLESCENTES (10-13 anos)")] %}
-        {% set lista = resultado[grupo_key] %}
-        <div class="section-title">
-            <h3>{{ titulo }}</h3>
-            <span class="section-count">{{ lista|length }} pacientes</span>
-        </div>
-        {% if lista %}
-        <div class="card" style="overflow-x: auto;">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="min-width: 200px;">Nome Paciente</th>
-                        <th style="min-width: 120px;">CPF/CNS</th>
-                        <th style="min-width: 150px;">Idade</th>
-                        <th style="min-width: 90px;">D/N</th>
-                        <th style="min-width: 180px;">Endereco</th>
-                        <th style="min-width: 300px;">Imunos Pendentes</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for p in lista %}
-                    <tr>
-                        <td><strong>{{ p.nome }}</strong></td>
-                        <td>{{ p.identificador }}</td>
-                        <td>{{ p.idade_texto }}</td>
-                        <td>{{ p.data_nascimento or "-" }}</td>
-                        <td>{{ p.endereco }}</td>
-                        <td>
-                            {% for imuno in p.imunos_pendentes %}
-                            <span class="imuno-tag">{{ imuno }}</span>
-                            {% endfor %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="card"><p>Nenhum paciente neste grupo com os filtros aplicados.</p></div>
-        {% endif %}
-        {% endfor %}
-        {% endif %}
-    </div>
-    <script>
-        const dropZone = document.getElementById('dropZone');
-        const fileInput = document.getElementById('csvFiles');
-        const fileList = document.getElementById('fileList');
+<div class="filter-actions">
+<button type="submit" class="btn btn-primary">Aplicar Filtros</button>
+<a href="{{ url_for('index') }}" class="btn btn-outline">Limpar Filtros</a>
+<a href="{{ url_for('download_csv') }}" class="btn btn-success">Baixar CSV</a>
+<a href="{{ url_for('download_pdf') }}" class="btn btn-pdf">Baixar PDF</a>
+<a href="{{ url_for('nova_analise') }}" class="btn btn-outline">Nova Analise</a>
+</div>
+</form>
+</div>
 
-        if (dropZone) {
-            ['dragenter', 'dragover'].forEach(e => {
-                dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.add('dragover'); });
-            });
-            ['dragleave', 'drop'].forEach(e => {
-                dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.remove('dragover'); });
-            });
-            dropZone.addEventListener('drop', (ev) => {
-                fileInput.files = ev.dataTransfer.files;
-                updateFileList();
-            });
-            fileInput.addEventListener('change', updateFileList);
-        }
+{% for grupo_key, titulo in [("criancas", "CRIANCAS (0-9 anos)"), ("adolescentes", "ADOLESCENTES (10-13 anos)")] %}
+{% set lista = resultado[grupo_key] %}
+<div class="section-title">
+<h3>{{ titulo }}</h3>
+<span class="section-count">{{ lista|length }} pacientes</span>
+</div>
+{% if lista %}
+<div class="card" style="overflow-x: auto;">
+<table>
+<thead>
+<tr>
+<th style="min-width: 200px;">Nome Paciente</th>
+<th style="min-width: 120px;">CPF/CNS</th>
+<th style="min-width: 150px;">Idade</th>
+<th style="min-width: 90px;">D/N</th>
+<th style="min-width: 180px;">Endereco</th>
+<th style="min-width: 300px;">Imunos Pendentes</th>
+</tr>
+</thead>
+<tbody>
+{% for p in lista %}
+<tr>
+<td><strong>{{ p.nome }}</strong></td>
+<td>{{ p.identificador }}</td>
+<td>{{ p.idade_texto }}</td>
+<td>{{ p.data_nascimento or "-" }}</td>
+<td>{{ p.endereco }}</td>
+<td>
+{% for imuno in p.imunos_pendentes %}
+<span class="imuno-tag">{{ imuno }}</span>
+{% endfor %}
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% else %}
+<div class="card"><p>Nenhum paciente neste grupo com os filtros aplicados.</p></div>
+{% endif %}
+{% endfor %}
+{% endif %}
+</div>
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('csvFiles');
+const fileList = document.getElementById('fileList');
 
-        function updateFileList() {
-            if (!fileList) return;
-            fileList.innerHTML = '';
-            Array.from(fileInput.files).forEach(f => {
-                const div = document.createElement('div');
-                div.className = 'file-item';
-                div.innerHTML = '<span class="file-icon">&#10003;</span> ' + f.name + ' (' + (f.size / 1024).toFixed(1) + ' KB)';
-                fileList.appendChild(div);
-            });
-        }
+if (dropZone) {
+['dragenter', 'dragover'].forEach(e => {
+dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(e => {
+dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.remove('dragover'); });
+});
+dropZone.addEventListener('drop', (ev) => {
+fileInput.files = ev.dataTransfer.files;
+updateFileList();
+});
+fileInput.addEventListener('change', updateFileList);
+}
 
-        // Gerenciamento de imunos para remover
-        let imunosRemover = new Set({{ filtros.imunos_remover | tojson }});
+function updateFileList() {
+if (!fileList) return;
+fileList.innerHTML = '';
+Array.from(fileInput.files).forEach(f => {
+const div = document.createElement('div');
+div.className = 'file-item';
+div.innerHTML = '<span class="file-icon">&#10003;</span> ' + f.name + ' (' + (f.size / 1024).toFixed(1) + ' KB)';
+fileList.appendChild(div);
+});
+}
 
-        function addImunoRemover() {
-            const select = document.getElementById('imuno_select');
-            const valor = select.value;
-            if (valor && !imunosRemover.has(valor)) {
-                imunosRemover.add(valor);
-                renderImunosRemover();
-            }
-            select.value = '';
-        }
+let imunosRemover = new Set({{ filtros.imunos_remover | tojson }});
 
-        function removeImunoRemover(element, valor) {
-            imunosRemover.delete(valor);
-            renderImunosRemover();
-        }
+function addImunoRemover() {
+const select = document.getElementById('imuno_select');
+const valor = select.value;
+if (valor && !imunosRemover.has(valor)) {
+imunosRemover.add(valor);
+renderImunosRemover();
+}
+select.value = '';
+}
 
-        function renderImunosRemover() {
-            const container = document.getElementById('imunosRemoveList');
-            const input = document.getElementById('imunos_remover_input');
+function removeImunoRemover(element, valor) {
+imunosRemover.delete(valor);
+renderImunosRemover();
+}
 
-            container.innerHTML = '';
-            imunosRemover.forEach(imuno => {
-                const chip = document.createElement('span');
-                chip.className = 'imuno-remove-chip';
-                chip.onclick = function() { removeImunoRemover(this, imuno); };
-                chip.innerHTML = imuno + ' <span class="x">&times;</span>';
-                container.appendChild(chip);
-            });
+function renderImunosRemover() {
+const container = document.getElementById('imunosRemoveList');
+const input = document.getElementById('imunos_remover_input');
 
-            input.value = Array.from(imunosRemover).join(',');
-        }
-    </script>
+container.innerHTML = '';
+imunosRemover.forEach(imuno => {
+const chip = document.createElement('span');
+chip.className = 'imuno-remove-chip';
+chip.onclick = function() { removeImunoRemover(this, imuno); };
+chip.innerHTML = imuno + ' <span class="x">&times;</span>';
+container.appendChild(chip);
+});
+
+input.value = Array.from(imunosRemover).join(',');
+}
+</script>
 </body>
 </html>
 """
@@ -425,39 +660,33 @@ HTML_TEMPLATE = """
 def index():
     global _ultimo_resultado
 
-    # Obter parametros de filtro (antes de qualquer retorno para evitar Undefined no Jinja2)
     filtros = {
         "idade_min": int(request.args.get("idade_min")) if request.args.get("idade_min") else None,
         "idade_max": int(request.args.get("idade_max")) if request.args.get("idade_max") else None,
         "endereco": request.args.get("endereco", ""),
         "imuno": request.args.get("imuno", ""),
         "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
+        "separar_endereco": request.args.get("separar_endereco") == "1",
     }
 
     if not _ultimo_resultado:
         return render_template_string(HTML_TEMPLATE, resultado=None, filtros=filtros, stats={}, todos_imunos=[])
 
-    # Aplicar unificacao de imunos e filtros
     pacientes_unificados = []
     todos_imunos_set = set()
 
     for grupo_key in ("criancas", "adolescentes"):
         for p in _ultimo_resultado.get(grupo_key, []):
             p_copia = dict(p)
-            # Unificar imunos
             p_copia["imunos_pendentes"] = _unificar_imunos(p.get("imunos_pendentes", []))
             pacientes_unificados.append(p_copia)
-            # Coletar todos os imunos para o dropdown
             for imuno in p_copia["imunos_pendentes"]:
-                # Extrair nome base do imuno
                 match = re.match(r'^([^(]+?)(?:\s*\(|$)', imuno.strip())
                 if match:
                     todos_imunos_set.add(match.group(1).strip())
 
-    # Aplicar filtros
     pacientes_filtrados = _aplicar_filtros(pacientes_unificados, filtros)
 
-    # Separar por grupo etario novamente
     criancas = [p for p in pacientes_filtrados if p.get("grupo_etario") == "Crianca"]
     adolescentes = [p for p in pacientes_filtrados if p.get("grupo_etario") == "Adolescente"]
 
@@ -501,7 +730,6 @@ def analisar_upload():
         flash("Selecione pelo menos um arquivo CSV.", "error")
         return redirect(url_for("index"))
 
-    # Cria pasta temporaria para os CSVs desta analise
     session_dir = tempfile.mkdtemp(prefix="kode_vacinas_session_", dir=UPLOAD_FOLDER)
 
     for f in files:
@@ -510,32 +738,27 @@ def analisar_upload():
         nome_destino = f.filename
         f.save(os.path.join(session_dir, nome_destino))
 
-    # Verifica quantos arquivos foram salvos
     arquivos_salvos = [f for f in os.listdir(session_dir) if f.endswith(".csv")]
     if not arquivos_salvos:
         flash("Nenhum arquivo CSV valido foi enviado.", "error")
         return redirect(url_for("index"))
 
     try:
-        # Monkey-patch temporario para usar a pasta de upload
         import analisador_vacinas as av
 
         csv_dir_original = av.CSV_DIR_PADRAO
         arquivos_originais = av.CSV_FILES[:]
 
-        # Detecta quais arquivos estao disponiveis e mapeia
         av.CSV_DIR_PADRAO = session_dir
         av.CSV_FILES = arquivos_salvos
 
         resultado = av.analisar(session_dir)
 
-        # Restaura valores originais
         av.CSV_DIR_PADRAO = csv_dir_original
         av.CSV_FILES = arquivos_originais
 
         _ultimo_resultado = resultado
 
-        # Exporta CSV consolidado para download
         csv_path = os.path.join(session_dir, "resultado_consolidado.csv")
         exportar_csv(resultado, csv_path)
         _ultimo_csv_path = csv_path
@@ -563,6 +786,73 @@ def download_csv():
         mimetype="text/csv",
         as_attachment=True,
         download_name=f"vacinas_consolidado_{date.today().isoformat()}.csv",
+    )
+
+
+@app.route("/download-pdf")
+def download_pdf():
+    global _ultimo_resultado
+
+    if not _ultimo_resultado:
+        flash("Nenhum resultado disponivel para exportacao PDF.", "error")
+        return redirect(url_for("index"))
+
+    # Obter filtros atuais
+    filtros = {
+        "idade_min": int(request.args.get("idade_min")) if request.args.get("idade_min") else None,
+        "idade_max": int(request.args.get("idade_max")) if request.args.get("idade_max") else None,
+        "endereco": request.args.get("endereco", ""),
+        "imuno": request.args.get("imuno", ""),
+        "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
+        "separar_endereco": request.args.get("separar_endereco") == "1",
+    }
+
+    # Preparar dados com unificacao e filtros
+    pacientes_unificados = []
+    for grupo_key in ("criancas", "adolescentes"):
+        for p in _ultimo_resultado.get(grupo_key, []):
+            p_copia = dict(p)
+            p_copia["imunos_pendentes"] = _unificar_imunos(p.get("imunos_pendentes", []))
+            pacientes_unificados.append(p_copia)
+
+    pacientes_filtrados = _aplicar_filtros(pacientes_unificados, filtros)
+
+    stats = {
+        "total_pacientes": len(pacientes_filtrados),
+        "total_criancas": sum(1 for p in pacientes_filtrados if p.get("grupo_etario") == "Crianca"),
+        "total_adolescentes": sum(1 for p in pacientes_filtrados if p.get("grupo_etario") == "Adolescente"),
+        "enquadrados": _ultimo_resultado.get("enquadrados", 0),
+    }
+
+    # Agrupar por logradouro/bairro se solicitado
+    if filtros.get("separar_endereco"):
+        pacientes_agrupados = _agrupar_por_logradouro_bairro(pacientes_filtrados)
+    else:
+        # Agrupar apenas por faixa etaria
+        pacientes_agrupados = OrderedDict()
+        criancas = [p for p in pacientes_filtrados if p.get("grupo_etario") == "Crianca"]
+        adolescentes = [p for p in pacientes_filtrados if p.get("grupo_etario") == "Adolescente"]
+        if criancas:
+            pacientes_agrupados["Criancas (0-9 anos)"] = criancas
+        if adolescentes:
+            pacientes_agrupados["Adolescentes (10-13 anos)"] = adolescentes
+
+    # Gerar HTML do PDF
+    pdf_html = _gerar_pdf_html(pacientes_agrupados, stats, date.today().isoformat())
+
+    try:
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=pdf_html).write_pdf()
+    except ImportError:
+        # Fallback: retorna HTML direto se WeasyPrint nao estiver instalado
+        flash("WeasyPrint nao instalado no servidor. Retornando HTML para impressao.", "warning")
+        return pdf_html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"vacinas_relatorio_{date.today().isoformat()}.pdf",
     )
 
 
