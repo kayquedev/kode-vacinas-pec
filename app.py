@@ -157,8 +157,9 @@ def _agrupar_por_logradouro_bairro(pacientes):
 
 def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
     """Gera HTML formatado para conversao em PDF via xhtml2pdf.
-    Usa apenas CSS compativel: sem flexbox, grid, border-radius ou nth-child.
-    Layout baseado em tables para compatibilidade maxima.
+    Layout padrao Kode APS: cabecalho compacto, tabela com endereco,
+    texto legivel (10px corpo), separacao por logradouro/bairro.
+    CSS compativel com xhtml2pdf (sem flexbox/grid/border-radius).
     """
     total_no_relatorio = sum(len(v) for v in pacientes_agrupados.values())
 
@@ -170,127 +171,97 @@ def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
 <style>
 @page {{
     size: A4 landscape;
-    margin: 1.5cm;
+    margin: 1.2cm;
 }}
 body {{
     font-family: Helvetica, Arial, sans-serif;
-    font-size: 9px;
+    font-size: 10px;
     color: #1e293b;
-    line-height: 1.3;
+    line-height: 1.4;
 }}
 .header {{
     background-color: #0e7490;
     color: white;
-    padding: 12px 15px;
-    margin-bottom: 15px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
     -pdf-keep-with-next: true;
 }}
-.header h1 {{
-    font-size: 16px;
-    margin: 0 0 3px 0;
-    color: white;
-}}
-.header .subtitle {{
-    font-size: 10px;
-    color: #e0f2fe;
-}}
-.stats-table {{
-    width: 100%;
-    margin-bottom: 15px;
-    border-collapse: collapse;
-    -pdf-keep-with-next: true;
-}}
-.stats-table td {{
-    background-color: #f0f9ff;
-    border: 1px solid #bae6fd;
-    padding: 8px 10px;
-    text-align: center;
-    width: 25%;
-}}
-.stat-value {{
-    font-size: 18px;
+.header-title {{
+    font-size: 14px;
     font-weight: bold;
-    color: #0e7490;
+    color: white;
+    margin: 0;
 }}
-.stat-label {{
-    font-size: 8px;
-    color: #64748b;
+.header-sub {{
+    font-size: 9px;
+    color: #e0f2fe;
     margin-top: 2px;
 }}
-.grupo-header {{
-    background-color: #f0fdf4;
-    border-left: 3px solid #059669;
-    padding: 6px 10px;
+.info-bar {{
+    font-size: 9px;
+    color: #475569;
     margin-bottom: 8px;
-    margin-top: 15px;
+    padding: 3px 0;
+    border-bottom: 1px solid #e2e8f0;
+    -pdf-keep-with-next: true;
+}}
+.grupo-header {{
+    background-color: #0e7490;
+    color: white;
+    padding: 4px 10px;
+    margin-bottom: 4px;
+    margin-top: 10px;
     font-size: 11px;
     font-weight: bold;
-    color: #065f46;
     -pdf-keep-with-next: true;
 }}
 table.dados {{
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 10px;
-    font-size: 8px;
+    margin-bottom: 6px;
+    font-size: 9px;
 }}
 table.dados th {{
     background-color: #f1f5f9;
     padding: 5px 6px;
     text-align: left;
     font-weight: bold;
-    border-bottom: 2px solid #cbd5e1;
-    color: #334155;
+    border-bottom: 2px solid #0e7490;
+    color: #0e7490;
+    font-size: 9px;
 }}
 table.dados td {{
     padding: 4px 6px;
     border-bottom: 1px solid #e2e8f0;
     vertical-align: top;
+    font-size: 9px;
 }}
 .imuno-tag {{
     display: inline;
     background-color: #eff6ff;
     color: #1e40af;
-    padding: 1px 4px;
-    font-size: 7px;
+    padding: 1px 3px;
+    font-size: 8px;
     margin-right: 2px;
 }}
 .footer {{
-    margin-top: 20px;
-    padding-top: 8px;
-    border-top: 1px solid #e2e8f0;
-    font-size: 7px;
-    color: #94a3b8;
+    margin-top: 12px;
+    padding-top: 5px;
+    border-top: 1px solid #cbd5e1;
+    font-size: 8px;
+    color: #64748b;
     text-align: center;
 }}
 </style>
 </head>
 <body>
 <div class="header">
-    <h1>Kode Vacinas PEC - Relatorio de Vacinacao</h1>
-    <div class="subtitle">Calendario PNI 2026 | Gerado em {data_analise}</div>
+    <div class="header-title">Kode Vacinas PEC - Relatorio de Imunobiologicos Pendentes</div>
+    <div class="header-sub">Calendario PNI 2026 | Gerado em {data_analise}</div>
 </div>
-
-<table class="stats-table">
-    <tr>
-        <td>
-            <div class="stat-value">{stats.get('total_pacientes', 0)}</div>
-            <div class="stat-label">Pacientes</div>
-        </td>
-        <td>
-            <div class="stat-value">{stats.get('total_criancas', 0)}</div>
-            <div class="stat-label">Criancas</div>
-        </td>
-        <td>
-            <div class="stat-value">{stats.get('total_adolescentes', 0)}</div>
-            <div class="stat-label">Adolescentes</div>
-        </td>
-        <td>
-            <div class="stat-value">{total_no_relatorio}</div>
-            <div class="stat-label">No Relatorio</div>
-        </td>
-    </tr>
-</table>
+<div class="info-bar">
+    Total: {stats.get('total_pacientes', 0)} pacientes | Criancas: {stats.get('total_criancas', 0)} | Adolescentes: {stats.get('total_adolescentes', 0)} | Registros no relatorio: {total_no_relatorio}
+</div>
 """
 
     for grupo_nome, pacientes in pacientes_agrupados.items():
@@ -299,11 +270,12 @@ table.dados td {{
 <table class="dados">
     <thead>
         <tr>
-            <th style="width: 22%;">Nome Paciente</th>
-            <th style="width: 12%;">CPF/CNS</th>
-            <th style="width: 13%;">Idade</th>
-            <th style="width: 9%;">D/N</th>
-            <th style="width: 44%;">Imunos Pendentes</th>
+            <th style="width: 20%;">Nome Paciente</th>
+            <th style="width: 10%;">CPF/CNS</th>
+            <th style="width: 10%;">Idade</th>
+            <th style="width: 8%;">D/N</th>
+            <th style="width: 18%;">Endereco</th>
+            <th style="width: 34%;">Imunos Pendentes</th>
         </tr>
     </thead>
     <tbody>
@@ -314,15 +286,17 @@ table.dados td {{
                 for im in p.get("imunos_pendentes", [])
             )
             dn = (p.get("data_nascimento") or "-")[:10]
-            nome = p.get('nome', '')
+            nome = p.get('nome', '')[:40]
             ident = p.get('identificador', '-')
-            idade = p.get('idade_texto', '-')
+            idade = p.get('idade_texto', '-')[:20]
+            endereco = p.get('endereco', '-')[:35]
             html += f"""
         <tr>
             <td><b>{nome}</b></td>
             <td>{ident}</td>
             <td>{idade}</td>
             <td>{dn}</td>
+            <td>{endereco}</td>
             <td>{imunos_html}</td>
         </tr>
 """
@@ -333,8 +307,7 @@ table.dados td {{
 
     html += f"""
 <div class="footer">
-    Kode Vacinas PEC - Analisador de Vacinacao e-SUS PEC x Calendario PNI 2026<br/>
-    Documento gerado automaticamente em {data_analise}
+    Kode Vacinas PEC - Analisador de Vacinacao e-SUS PEC x Calendario PNI 2026 | Documento gerado em {data_analise}
 </div>
 </body>
 </html>
@@ -533,7 +506,7 @@ th, td { padding: 6px 4px; }
 <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
 <a href="{{ url_for('index') }}" class="btn btn-outline">Limpar Filtros</a>
 <a href="{{ url_for('download_csv') }}" class="btn btn-success">Baixar CSV</a>
-<a href="{{ url_for('download_pdf') }}" class="btn btn-pdf">Baixar PDF</a>
+<a href="{{ url_for('download_pdf', idade_min=filtros.idade_min or '', idade_max=filtros.idade_max or '', endereco=filtros.endereco, imuno=filtros.imuno, imunos_remover=','.join(filtros.imunos_remover), separar_endereco='1' if filtros.separar_endereco else '') }}" class="btn btn-pdf">Baixar PDF</a>
 <a href="{{ url_for('nova_analise') }}" class="btn btn-outline">Nova Analise</a>
 </div>
 </form>
