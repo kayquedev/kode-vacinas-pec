@@ -4,8 +4,10 @@ Analisador de Vacinas - e-SUS PEC x Calendario PNI 2026 / Kode APS
 ====================================================================
 Le os CSVs de busca ativa do e-SUS PEC, relaciona cada imunobiologico
 com o Calendario Nacional de Vacinacao 2026 (PNI) e valida pela faixa
-etaria (0-13 anos). Gera listagem separada por Crianca (0-9) e
-Adolescente (10-13), com opcao de exportar CSV ou JSON.
+etaria (0-13 anos). Gera listagem consolidada por paciente (uma linha
+por pessoa) no estilo Kode APS:
+
+    NOME PACIENTE | CPF/CNS | IDADE | D/N | ENDERECO | IMUNOS PENDENTES
 
 Uso:
     python analisador_vacinas.py
@@ -16,6 +18,7 @@ Uso:
 import argparse, csv, json, os, re, sys, unicodedata
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
+from collections import OrderedDict
 
 def _norm(s):
     """Normaliza string: remove acentos, lowercase, strip."""
@@ -41,7 +44,6 @@ IMUNOS_PNI = {
     "VVSR-Rec": (108, "Virus sincicial respiratorio"),
 }
 
-# Chaves NORMALIZADAS (sem acento) para evitar problemas de encoding
 NOME_PEC_PARA_SIGLA = {
     _norm("vacina bcg"): "BCG",
     _norm("vacina difteria e tetano adulto"): "DT",
@@ -64,62 +66,38 @@ NOME_PEC_PARA_SIGLA = {
 }
 
 # === 2. CALENDARIO PNI 2026 (0-13 anos) ===
-# Faixas ampliadas para BUSCA ATIVA (resgate de atrasados):
-# - O e-SUS PEC lista vacinas "atrasadas" que podem estar muito alem
-#   do marco ideal. Para fins de validacao, consideramos que qualquer
-#   dose pendente dentro da faixa pediatrica (0-13 anos = 0-156m) e
-#   valida se o imunobiologico esta previsto no PNI para aquela fase.
-# - Janelas seguem o PNI oficial como limite INFERIOR (idade minima
-#   para tomar), mas o limite SUPERIOR e estendido ate 156 meses
-#   (13 anos) para vacinas infantis, pois a busca ativa visa resgatar
-#   quem perdeu o prazo.
-# - Excecoes: Rotavirus tem janela estreita oficial (ate ~8m); aqui
-#   mantemos ate 11m conforme nota tecnica PNI. Influenza e anual.
 CALENDARIO_PNI_0_13 = [
-    # Ao nascer
     {"sigla":"HB","min_m":0,"max_m":156,"dose":"1 dose","grupo":"CA"},
     {"sigla":"BCG","min_m":0,"max_m":156,"dose":"Dose unica","grupo":"C"},
-    # 2 meses (janela ate 11m para serie primaria)
     {"sigla":"PENTA","min_m":2,"max_m":156,"dose":"1a dose","grupo":"C"},
     {"sigla":"VIP","min_m":2,"max_m":156,"dose":"1a dose","grupo":"C"},
     {"sigla":"ROTA","min_m":2,"max_m":11,"dose":"1a dose","grupo":"C"},
     {"sigla":"VPC20","min_m":2,"max_m":156,"dose":"1a dose","grupo":"C"},
-    # 3 meses
     {"sigla":"MenC","min_m":3,"max_m":156,"dose":"1a dose","grupo":"C"},
-    # 4 meses
     {"sigla":"PENTA","min_m":4,"max_m":156,"dose":"2a dose","grupo":"C"},
     {"sigla":"VIP","min_m":4,"max_m":156,"dose":"2a dose","grupo":"C"},
     {"sigla":"ROTA","min_m":4,"max_m":11,"dose":"2a dose","grupo":"C"},
     {"sigla":"VPC10","min_m":4,"max_m":156,"dose":"2a dose","grupo":"C"},
-    # 5 meses
     {"sigla":"MenC","min_m":5,"max_m":156,"dose":"2a dose","grupo":"C"},
-    # 6 meses
     {"sigla":"PENTA","min_m":6,"max_m":156,"dose":"3a dose","grupo":"C"},
     {"sigla":"VIP","min_m":6,"max_m":156,"dose":"3a dose","grupo":"C"},
     {"sigla":"COVID-19","min_m":6,"max_m":156,"dose":"1a dose","grupo":"C"},
-    # Influenza anual (6m em diante, sem limite superior na faixa ped)
     {"sigla":"INF3","min_m":6,"max_m":156,"dose":"Anual","grupo":"CA"},
-    # 7 meses COVID
     {"sigla":"COVID-19","min_m":7,"max_m":156,"dose":"2a dose","grupo":"C"},
-    # 9 meses
     {"sigla":"COVID-19","min_m":9,"max_m":156,"dose":"3a dose","grupo":"C"},
     {"sigla":"VFA","min_m":9,"max_m":156,"dose":"1 dose","grupo":"CA"},
-    # 12 meses
     {"sigla":"VPC20","min_m":12,"max_m":156,"dose":"Reforco","grupo":"C"},
     {"sigla":"MenACWY","min_m":12,"max_m":156,"dose":"1 dose","grupo":"CA"},
     {"sigla":"SCR","min_m":12,"max_m":156,"dose":"1a dose","grupo":"C"},
-    # 15 meses
     {"sigla":"DTP","min_m":15,"max_m":156,"dose":"1o reforco","grupo":"C"},
     {"sigla":"VIP","min_m":15,"max_m":156,"dose":"1o reforco","grupo":"C"},
     {"sigla":"SCR","min_m":15,"max_m":156,"dose":"2a dose","grupo":"C"},
     {"sigla":"VZ","min_m":15,"max_m":156,"dose":"1a dose","grupo":"C"},
     {"sigla":"HAinf","min_m":15,"max_m":156,"dose":"1 dose","grupo":"C"},
-    # 4 anos / 48 meses
     {"sigla":"DTP","min_m":48,"max_m":156,"dose":"2o reforco","grupo":"C"},
     {"sigla":"VIP","min_m":48,"max_m":156,"dose":"2o reforco","grupo":"C"},
     {"sigla":"VZ","min_m":48,"max_m":156,"dose":"2a dose","grupo":"C"},
     {"sigla":"VFA","min_m":48,"max_m":156,"dose":"1 reforco","grupo":"CA"},
-    # Adolescente (10-13 anos = 120-156 meses)
     {"sigla":"HPV4","min_m":108,"max_m":228,"dose":"1 dose","grupo":"A"},
     {"sigla":"DNG","min_m":72,"max_m":192,"dose":"2 doses","grupo":"A"},
     {"sigla":"MenACWY","min_m":132,"max_m":168,"dose":"1 dose","grupo":"A"},
@@ -190,6 +168,10 @@ def ler_csv_pec(caminho):
         cpf = c("CPF", 5)
         cns = c("CNS", 6)
         microarea = c("Micro", 10)
+        rua = c("Rua", 11)
+        numero = c("Numero", 12)
+        complemento = c("Complemento", 13)
+        bairro = c("Bairro", 14)
         status_vacina = c("Status da vacina", 23)
         imuno_nome = c("Imunobiol", 24)
         dose = c("Dose", 25)
@@ -197,12 +179,24 @@ def ler_csv_pec(caminho):
         dt_nasc = _parse_data_nasc(dt_nasc_str)
         grupo = _detectar_grupo(idade_meses)
         sigla_pni = _mapear_imuno(imuno_nome)
+        # Monta endereco completo
+        endereco_parts = [p for p in [rua, numero, complemento, bairro] if p and p != "-"]
+        endereco = ", ".join(endereco_parts) if endereco_parts else "-"
         registros.append({
-            "nome": nome, "data_nascimento": dt_nasc.isoformat() if dt_nasc else None,
-            "idade_meses": idade_meses, "idade_texto": idade_str, "sexo": sexo,
-            "cpf": cpf, "cns": cns, "microarea": microarea,
-            "status_vacina": status_vacina, "imuno_nome_pec": imuno_nome,
-            "sigla_pni": sigla_pni, "dose": dose, "grupo_etario": grupo,
+            "nome": nome,
+            "data_nascimento": dt_nasc.isoformat() if dt_nasc else None,
+            "idade_meses": idade_meses,
+            "idade_texto": idade_str,
+            "sexo": sexo,
+            "cpf": cpf if cpf and cpf != "-" else "",
+            "cns": cns if cns and cns != "-" else "",
+            "microarea": microarea,
+            "endereco": endereco,
+            "status_vacina": status_vacina,
+            "imuno_nome_pec": imuno_nome,
+            "sigla_pni": sigla_pni,
+            "dose": dose,
+            "grupo_etario": grupo,
             "arquivo_origem": os.path.basename(caminho),
         })
     return registros
@@ -244,22 +238,15 @@ def validar_contra_calendario(registro):
     compativeis = [r for r in CALENDARIO_PNI_0_13
                    if r["sigla"] == sigla and r["min_m"] <= idade_m <= r["max_m"]]
     if not compativeis:
-        # Classifica como CONTRAINDICADO quando ha regra clinica explicita
         if sigla == "ROTA" and idade_m > 11:
-            resultado["enquadrado"] = True  # conta como valido (exclusao correta)
+            resultado["enquadrado"] = True
             resultado["regra_pni"] = "ROTA | Contraindicado >11m"
-            resultado["observacao"] = (
-                f"Rotavirus contraindicado para {idade_m} meses (>11m). "
-                f"Registro correto: vacina nao deve ser administrada."
-            )
+            resultado["observacao"] = "Rotavirus contraindicado para >11 meses."
             return resultado
         if sigla == "INF3" and idade_m < 6:
             resultado["enquadrado"] = True
             resultado["regra_pni"] = "INF3 | Contraindicado <6m"
-            resultado["observacao"] = (
-                f"Influenza contraindicada para {idade_m} meses (<6m). "
-                f"Registro correto: vacina nao deve ser administrada."
-            )
+            resultado["observacao"] = "Influenza contraindicada para <6 meses."
             return resultado
         resultado["observacao"] = (
             f"{sigla} nao prevista no PNI 2026 para {idade_m} meses "
@@ -275,12 +262,70 @@ def validar_contra_calendario(registro):
     resultado["regra_pni"] = "; ".join(
         f"{r['sigla']} | {r['dose']} | {r['min_m']}-{r['max_m']}m" for r in compativeis
     )
-    resultado["observacao"] = (
-        f"Dose PEC '{registro['dose']}' nao corresponde exatamente as doses PNI"
-    )
+    resultado["observacao"] = f"Dose PEC '{registro['dose']}' nao corresponde exatamente as doses PNI"
     return resultado
 
-# === 5. ORQUESTRADOR PRINCIPAL ===
+# === 5. CONSOLIDACAO POR PACIENTE ===
+def _chave_paciente(reg):
+    """Chave unica por paciente: CPF preferencialmente, senao CNS, senao nome+dt_nasc."""
+    cpf = reg.get("cpf", "").strip()
+    cns = reg.get("cns", "").strip()
+    if cpf and cpf != "-" and len(cpf) >= 11:
+        return f"CPF:{cpf}"
+    if cns and cns != "-" and len(cns) >= 10:
+        return f"CNS:{cns}"
+    return f"NOME:{reg.get('nome','')}|DN:{reg.get('data_nascimento','')}"
+
+def _formatar_identificador(reg):
+    """Retorna CPF/CNS formatado para exibicao."""
+    cpf = reg.get("cpf", "").strip()
+    cns = reg.get("cns", "").strip()
+    if cpf and cpf != "-":
+        return cpf
+    if cns and cns != "-":
+        return cns
+    return "-"
+
+def _formatar_imuno_pendente(reg):
+    """Formata um unico imuno pendente para exibicao na lista consolidada."""
+    nome_pec = reg.get("imuno_nome_pec", "")
+    dose = reg.get("dose", "")
+    status = reg.get("status_vacina", "")
+    sigla = reg.get("sigla_pni", "")
+    # Remove prefixo "Vacina " para economizar espaco
+    nome_curto = re.sub(r"^Vacina\s+", "", nome_pec, flags=re.IGNORECASE)
+    partes = [nome_curto]
+    if dose:
+        partes.append(f"({dose})")
+    if status:
+        partes.append(f"[{status}]")
+    return " ".join(partes)
+
+def consolidar_por_paciente(todos_registros):
+    """Agrupa registros por paciente, retornando uma linha por pessoa."""
+    pacientes = OrderedDict()
+    for reg in todos_registros:
+        chave = _chave_paciente(reg)
+        if chave not in pacientes:
+            pacientes[chave] = {
+                "nome": reg["nome"],
+                "identificador": _formatar_identificador(reg),
+                "idade_texto": reg["idade_texto"],
+                "data_nascimento": reg["data_nascimento"],
+                "endereco": reg["endereco"],
+                "grupo_etario": reg["grupo_etario"],
+                "idade_meses": reg["idade_meses"],
+                "imunos_pendentes": [],
+                "total_imunos": 0,
+            }
+        imuno_str = _formatar_imuno_pendente(reg)
+        # Evita duplicatas exatas
+        if imuno_str not in pacientes[chave]["imunos_pendentes"]:
+            pacientes[chave]["imunos_pendentes"].append(imuno_str)
+            pacientes[chave]["total_imunos"] += 1
+    return list(pacientes.values())
+
+# === 6. ORQUESTRADOR PRINCIPAL ===
 CSV_DIR_PADRAO = r"D:\Documentos\KODE\kode-vacinas-pec\vacinas_pec_sgp"
 CSV_FILES = [
     "atrasada 0 a 9.csv",
@@ -304,82 +349,109 @@ def analisar(csv_dir):
     for reg in todos:
         v = validar_contra_calendario(reg)
         reg.update(v)
-    criancas = [r for r in todos if r["grupo_etario"] == "Crianca"]
-    adolescentes = [r for r in todos if r["grupo_etario"] == "Adolescente"]
-    fora = [r for r in todos if r["grupo_etario"] == "Fora da faixa (>13)"]
-    desc = [r for r in todos if r["grupo_etario"] == "Desconhecido"]
+    # Consolidar por paciente
+    pacientes = consolidar_por_paciente(todos)
+    criancas = [p for p in pacientes if p["grupo_etario"] == "Crianca"]
+    adolescentes = [p for p in pacientes if p["grupo_etario"] == "Adolescente"]
+    fora = [p for p in pacientes if p["grupo_etario"] == "Fora da faixa (>13)"]
+    desc = [p for p in pacientes if p["grupo_etario"] == "Desconhecido"]
     enq = sum(1 for r in todos if r["enquadrado"])
     nao_enq = sum(1 for r in todos if not r["enquadrado"])
     nao_map = sum(1 for r in todos if r["sigla_pni"] is None)
     imunos_nm = sorted(set(r["imuno_nome_pec"] for r in todos if r["sigla_pni"] is None))
     return {
-        "data_analise": date.today().isoformat(), "resumo_arquivos": resumo,
-        "total_registros": len(todos), "total_criancas": len(criancas),
-        "total_adolescentes": len(adolescentes), "total_fora_faixa": len(fora),
-        "total_desconhecidos": len(desc), "enquadrados": enq,
-        "nao_enquadrados": nao_enq, "nao_mapeados": nao_map,
+        "data_analise": date.today().isoformat(),
+        "resumo_arquivos": resumo,
+        "total_registros": len(todos),
+        "total_pacientes": len(pacientes),
+        "total_criancas": len(criancas),
+        "total_adolescentes": len(adolescentes),
+        "total_fora_faixa": len(fora),
+        "total_desconhecidos": len(desc),
+        "enquadrados": enq,
+        "nao_enquadrados": nao_enq,
+        "nao_mapeados": nao_map,
         "imunos_nao_mapeados": imunos_nm,
-        "criancas": criancas, "adolescentes": adolescentes,
-        "fora_faixa": fora, "desconhecidos": desc,
+        "pacientes": pacientes,
+        "criancas": criancas,
+        "adolescentes": adolescentes,
+        "fora_faixa": fora,
+        "desconhecidos": desc,
     }
 
-# === 6. EXPORTACAO E RELATORIO ===
-CAMPOS_CSV = [
-    "grupo_etario","nome","data_nascimento","idade_texto","sexo",
-    "cpf","cns","microarea","status_vacina","imuno_nome_pec",
-    "sigla_pni","dose","enquadrado","regra_pni","observacao","arquivo_origem",
+# === 7. EXPORTACAO E RELATORIO ===
+CAMPOS_CSV_CONSOLIDADO = [
+    "grupo_etario", "nome", "identificador", "idade_texto",
+    "data_nascimento", "endereco", "total_imunos", "imunos_pendentes",
 ]
 
 def exportar_csv(resultado, caminho):
+    """Exporta CSV consolidado: uma linha por paciente."""
     linhas = []
-    for k in ("criancas","adolescentes","fora_faixa","desconhecidos"):
-        linhas.extend(resultado[k])
+    for grupo_key in ("criancas", "adolescentes", "fora_faixa", "desconhecidos"):
+        for p in resultado[grupo_key]:
+            linhas.append({
+                "grupo_etario": p["grupo_etario"],
+                "nome": p["nome"],
+                "identificador": p["identificador"],
+                "idade_texto": p["idade_texto"],
+                "data_nascimento": p["data_nascimento"] or "-",
+                "endereco": p["endereco"],
+                "total_imunos": p["total_imunos"],
+                "imunos_pendentes": " | ".join(p["imunos_pendentes"]),
+            })
     with open(caminho, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=CAMPOS_CSV, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=CAMPOS_CSV_CONSOLIDADO, extrasaction="ignore")
         w.writeheader()
         w.writerows(linhas)
-    print(f"\n+ CSV exportado: {caminho}")
+    print(f"\n+ CSV consolidado exportado: {caminho}")
+    print(f"  Total de pacientes unicos: {len(linhas)}")
 
 def imprimir_resumo(resultado):
-    print("\n" + "="*60)
-    print(" RESUMO DA ANALISE - Vacinas e-SUS PEC x PNI 2026")
-    print("="*60)
+    print("\n" + "="*70)
+    print(" RELATORIO DE VACINACAO - e-SUS PEC x PNI 2026 / Kode APS")
+    print("="*70)
     print(f" Data da analise: {resultado['data_analise']}")
-    print(f" Total de registros: {resultado['total_registros']}")
-    print(f" Criancas (0-9 anos): {resultado['total_criancas']}")
-    print(f" Adolescentes (10-13): {resultado['total_adolescentes']}")
-    print(f" Fora da faixa (>13): {resultado['total_fora_faixa']}")
-    print(f" Idade desconhecida: {resultado['total_desconhecidos']}")
-    print(f" Enquadrados no PNI: {resultado['enquadrados']}")
-    print(f" Nao enquadrados: {resultado['nao_enquadrados']}")
+    print(f" Total de registros de vacinas: {resultado['total_registros']}")
+    print(f" Total de pacientes unicos: {resultado['total_pacientes']}")
+    print(f" Criancas (0-9 anos): {resultado['total_criancas']} pacientes")
+    print(f" Adolescentes (10-13): {resultado['total_adolescentes']} pacientes")
+    print(f" Fora da faixa (>13): {resultado['total_fora_faixa']} pacientes")
+    print(f" Idade desconhecida: {resultado['total_desconhecidos']} pacientes")
+    print(f" Registros enquadrados no PNI: {resultado['enquadrados']}")
+    print(f" Registros nao enquadrados: {resultado['nao_enquadrados']}")
     print(f" Imunos nao mapeados: {resultado['nao_mapeados']}")
     if resultado["imunos_nao_mapeados"]:
         print(f" Lista de imunos nao mapeados:")
         for im in resultado["imunos_nao_mapeados"]:
             print(f"   - {im}")
-    print("\n--- LISTAGEM POR GRUPO ETARIO ---")
-    for grupo_key, titulo in [("criancas","CRIANCAS (0-9 anos)"),("adolescentes","ADOLESCENTES (10-13 anos)")]:
+
+    # Listagem consolidada estilo Kode APS
+    for grupo_key, titulo in [("criancas","CRIANCAS (0-9 anos)"),
+                               ("adolescentes","ADOLESCENTES (10-13 anos)")]:
         lista = resultado[grupo_key]
-        print(f"\n### {titulo} ({len(lista)} registros) ###")
+        print(f"\n{'='*70}")
+        print(f" {titulo} - {len(lista)} pacientes")
+        print(f"{'='*70}")
         if not lista:
-            print("  (nenhum registro)")
+            print(" (nenhum paciente)")
             continue
-        for r in lista:
-            status = "OK" if r["enquadrado"] else "NAO ENQUADRADO"
-            regra = r["regra_pni"] or "-"
-            obs = r["observacao"] or ""
-            linha = (
-                f"  {r['nome']} | {r['idade_texto']} | {r['imuno_nome_pec']} | "
-                f"{r['dose']} | {r['status_vacina']} | [{status}] {regra}"
-            )
-            if obs:
-                linha += f" | OBS: {obs}"
-            print(linha)
+        # Cabecalho estilo Kode APS
+        print(f" {'NOME PACIENTE':<40} | {'CPF/CNS':<18} | {'IDADE':<25} | {'D/N':<12} | {'ENDERECO':<35} | IMUNOS PENDENTES")
+        print(f" {'-'*40}-+-{'-'*18}-+-{'-'*25}-+-{'-'*12}-+-{'-'*35}-+-{'-'*30}")
+        for p in lista:
+            nome = p["nome"][:40]
+            ident = p["identificador"][:18]
+            idade = p["idade_texto"][:25]
+            dn = (p["data_nascimento"] or "-")[:12]
+            ender = p["endereco"][:35]
+            imunos = " | ".join(p["imunos_pendentes"])
+            print(f" {nome:<40} | {ident:<18} | {idade:<25} | {dn:<12} | {ender:<35} | {imunos}")
 
 def main():
     parser = argparse.ArgumentParser(description="Analisador de Vacinas e-SUS PEC x PNI 2026")
     parser.add_argument("--csv-dir", default=CSV_DIR_PADRAO, help="Pasta dos CSVs do e-SUS PEC")
-    parser.add_argument("--saida", help="Caminho do CSV de saida")
+    parser.add_argument("--saida", help="Caminho do CSV consolidado de saida")
     parser.add_argument("--json", action="store_true", help="Saida JSON no stdout")
     args = parser.parse_args()
     resultado = analisar(args.csv_dir)
