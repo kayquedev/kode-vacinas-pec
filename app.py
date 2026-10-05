@@ -171,70 +171,74 @@ def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
 <style>
 @page {{
     size: A4 landscape;
-    margin: 1.2cm;
+    margin: 1cm;
 }}
 body {{
     font-family: Helvetica, Arial, sans-serif;
     font-size: 10px;
     color: #1e293b;
-    line-height: 1.4;
+    line-height: 1.3;
 }}
 .header {{
     background-color: #0e7490;
     color: white;
-    padding: 8px 12px;
-    margin-bottom: 8px;
+    padding: 6px 10px;
+    margin-bottom: 6px;
     -pdf-keep-with-next: true;
 }}
 .header-title {{
-    font-size: 14px;
+    font-size: 13px;
     font-weight: bold;
     color: white;
     margin: 0;
 }}
 .header-sub {{
-    font-size: 9px;
+    font-size: 8px;
     color: #e0f2fe;
-    margin-top: 2px;
+    margin-top: 1px;
 }}
 .info-bar {{
-    font-size: 9px;
+    font-size: 8px;
     color: #475569;
-    margin-bottom: 8px;
-    padding: 3px 0;
+    margin-bottom: 6px;
+    padding: 2px 0;
     border-bottom: 1px solid #e2e8f0;
     -pdf-keep-with-next: true;
 }}
 .grupo-header {{
     background-color: #0e7490;
     color: white;
-    padding: 4px 10px;
-    margin-bottom: 4px;
-    margin-top: 10px;
-    font-size: 11px;
+    padding: 3px 8px;
+    margin-bottom: 2px;
+    margin-top: 6px;
+    font-size: 10px;
     font-weight: bold;
     -pdf-keep-with-next: true;
 }}
 table.dados {{
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     font-size: 9px;
+    -pdf-keep-in-frame-mode: shrink;
 }}
 table.dados th {{
     background-color: #f1f5f9;
-    padding: 5px 6px;
+    padding: 3px 5px;
     text-align: left;
     font-weight: bold;
     border-bottom: 2px solid #0e7490;
     color: #0e7490;
-    font-size: 9px;
+    font-size: 8px;
 }}
 table.dados td {{
-    padding: 4px 6px;
+    padding: 3px 5px;
     border-bottom: 1px solid #e2e8f0;
     vertical-align: top;
     font-size: 9px;
+}}
+tr {{
+    -pdf-keep-with-next: false;
 }}
 .imuno-tag {{
     display: inline;
@@ -242,13 +246,13 @@ table.dados td {{
     color: #1e40af;
     padding: 1px 3px;
     font-size: 8px;
-    margin-right: 2px;
+    margin-right: 1px;
 }}
 .footer {{
-    margin-top: 12px;
-    padding-top: 5px;
+    margin-top: 8px;
+    padding-top: 4px;
     border-top: 1px solid #cbd5e1;
-    font-size: 8px;
+    font-size: 7px;
     color: #64748b;
     text-align: center;
 }}
