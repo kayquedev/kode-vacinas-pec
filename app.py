@@ -425,10 +425,7 @@ HTML_TEMPLATE = """
 def index():
     global _ultimo_resultado
 
-    if not _ultimo_resultado:
-        return render_template_string(HTML_TEMPLATE, resultado=None, filtros={}, stats={}, todos_imunos=[])
-
-    # Obter parametros de filtro
+    # Obter parametros de filtro (antes de qualquer retorno para evitar Undefined no Jinja2)
     filtros = {
         "idade_min": int(request.args.get("idade_min")) if request.args.get("idade_min") else None,
         "idade_max": int(request.args.get("idade_max")) if request.args.get("idade_max") else None,
@@ -436,6 +433,9 @@ def index():
         "imuno": request.args.get("imuno", ""),
         "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
     }
+
+    if not _ultimo_resultado:
+        return render_template_string(HTML_TEMPLATE, resultado=None, filtros=filtros, stats={}, todos_imunos=[])
 
     # Aplicar unificacao de imunos e filtros
     pacientes_unificados = []
