@@ -223,31 +223,30 @@ table.dados {{
     width: 100%;
     border-collapse: collapse;
     margin-bottom: 4px;
-    font-size: 8px;
-    -pdf-keep-in-frame-mode: shrink;
+    font-size: 9px;
 }}
 table.dados th {{
     background-color: #f1f5f9;
-    padding: 3px 5px;
+    padding: 4px 6px;
     text-align: left;
     font-weight: bold;
     border-bottom: 2px solid #0e7490;
     color: #0e7490;
-    font-size: 7px;
+    font-size: 8px;
 }}
 table.dados td {{
-    padding: 3px 5px;
+    padding: 4px 6px;
     border-bottom: 1px solid #e2e8f0;
     vertical-align: top;
-    font-size: 8px;
+    font-size: 9px;
 }}
 .imuno-tag {{
     display: inline;
     background-color: #eff6ff;
     color: #1e40af;
-    padding: 1px 3px;
-    font-size: 7px;
-    margin-right: 1px;
+    padding: 1px 4px;
+    font-size: 8px;
+    margin-right: 2px;
 }}
 .footer {{
     margin-top: 8px;
@@ -280,12 +279,11 @@ table.dados td {{
 <table class="dados">
 <thead>
 <tr>
-    <th style="width: 18%;">NOME</th>
-    <th style="width: 10%;">CPF/CNS</th>
-    <th style="width: 5%;">MICRO</th>
-    <th style="width: 9%;">IDADE</th>
-    <th style="width: 16%;">ENDERECO</th>
-    <th style="width: 42%;">IMUNOS — CALENDARIO / APLICADO / FALTAM</th>
+    <th style="width: 20%;">NOME</th>
+    <th style="width: 12%;">CPF/CNS</th>
+    <th style="width: 10%;">IDADE</th>
+    <th style="width: 18%;">ENDERECO</th>
+    <th style="width: 40%;">IMUNOS PENDENTES</th>
 </tr>
 </thead>
 <tbody>
@@ -295,16 +293,14 @@ table.dados td {{
                 f'<span class="imuno-tag">{im}</span>'
                 for im in p.get("imunos_pendentes", [])
             )
-            nome = p.get('nome', '')[:35]
+            nome = p.get('nome', '')[:40]
             ident = p.get('identificador', '-')
-            idade = p.get('idade_texto', '-')[:18]
-            endereco = p.get('endereco', '-')[:30]
-            micro = "-"
+            idade = p.get('idade_texto', '-')[:20]
+            endereco = p.get('endereco', '-')[:35]
             html += f"""
 <tr>
     <td><b>{nome}</b></td>
     <td>{ident}</td>
-    <td>{micro}</td>
     <td>{idade}</td>
     <td>{endereco}</td>
     <td>{imunos_html}</td>
