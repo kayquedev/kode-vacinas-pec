@@ -160,14 +160,23 @@ body {{
     color: #1e293b;
     line-height: 1.3;
 }}
-.header {{
+.header-table {{
+    width: 100%;
+    border-collapse: collapse;
     border-bottom: 2px solid #0e7490;
-    padding-bottom: 6px;
     margin-bottom: 6px;
     -pdf-keep-with-next: true;
 }}
-.header-top {{
-    margin-bottom: 4px;
+.header-table td {{
+    vertical-align: middle;
+    padding: 4px 0;
+}}
+.header-left {{
+    text-align: left;
+}}
+.header-right {{
+    text-align: right;
+    width: 80px;
 }}
 .logo {{
     height: 40px;
@@ -177,37 +186,10 @@ body {{
     font-weight: bold;
     color: #0e7490;
 }}
-.subtitulo {{
-    font-size: 9px;
-    color: #64748b;
-    margin-top: 2px;
-}}
-.info-bar {{
+.info-line {{
     font-size: 8px;
     color: #475569;
-    margin-bottom: 6px;
-    padding: 3px 6px;
-    background-color: #f1f5f9;
-    border: 1px solid #e2e8f0;
-    -pdf-keep-with-next: true;
-}}
-.filtros-bar {{
-    font-size: 7px;
-    color: #64748b;
-    margin-bottom: 6px;
-    padding: 2px 6px;
-    border: 1px solid #e2e8f0;
-    -pdf-keep-with-next: true;
-}}
-.resumo-bar {{
-    font-size: 8px;
-    color: #0e7490;
-    font-weight: bold;
-    margin-bottom: 8px;
-    padding: 3px 6px;
-    background-color: #f0f9ff;
-    border: 1px solid #bae6fd;
-    -pdf-keep-with-next: true;
+    margin-top: 3px;
 }}
 .grupo-header {{
     background-color: #0e7490;
@@ -259,19 +241,15 @@ table.dados td {{
 </style>
 </head>
 <body>
-<div class="header">
-    <div class="header-top">
-        {logo_img}
-        <span class="titulo">VACINACAO - IMUNOS</span>
-    </div>
-    <div class="subtitulo">Kode Vacinas PEC - Sistema de Apoio a Gestao Municipal</div>
-</div>
-<div class="info-bar">
-    EMITIDO POR: Kode Vacinas PEC, EM: {agora} &bull; TOTAL DE REGISTROS: {total_no_relatorio}
-</div>
-<div class="resumo-bar">
-    Cidadãos (filtro): {stats.get('total_pacientes', 0)} | Registros no PDF: {total_no_relatorio} | Criancas: {stats.get('total_criancas', 0)} | Adolescentes: {stats.get('total_adolescentes', 0)}
-</div>
+<table class="header-table">
+<tr>
+<td class="header-left">
+<span class="titulo">VACINACAO - IMUNOS</span>
+<div class="info-line">EMITIDO POR: Administrador, EM: {agora} | CIDADÃOS EMITIDOS: {total_no_relatorio} REGISTROS</div>
+</td>
+<td class="header-right">{logo_img}</td>
+</tr>
+</table>
 """
     for grupo_nome, pacientes in pacientes_agrupados.items():
         html += f"""
