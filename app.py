@@ -837,9 +837,33 @@ def _extrair_bairro_logradouro(endereco_raw):
     return (logradouro_limpo[:50], bairro[:30])
 
 
+_ORDEM_LOGRADOUROS = [
+    "JK", "PRIMEIRO DE JANEIRO", "7 DE SETEMBRO", "PRACA CORONEL",
+    "DAS DORES", "ESMERALDA", "CURRAL", "VENANCIOS", "MOINHOS",
+    "ESTRADA BR 262", "MAIAS", "MORRO AGUDO",
+    "1ª RUA LAGOINHA", "2ª RUA LAGOINHA", "3ª RUA LAGOINHA",
+    "4ª RUA LAGOINHA", "5ª RUA LAGOINHA", "6ª RUA LAGOINHA",
+    "7ª RUA LAGOINHA", "AREA LAGOINHA", "ESTACAO", "JACARE",
+    "FAZENDAS VARIADAS",
+]
+
+def _ordem_logradouro_key(logradouro_raw):
+    """Retorna chave de ordenacao baseada na lista personalizada de logradouros."""
+    if not logradouro_raw or logradouro_raw == "-":
+        return (999, "")
+    upper = logradouro_raw.upper().strip()
+    # Normalizar variacoes comuns
+    normalized = re.sub(r'\b(RUA|AVENIDA|AV|TRAVESSA|TV|ALAMEDA)\b', '', upper).strip()
+    normalized = re.sub(r'\s+', ' ', normalized)
+    for idx, ref in enumerate(_ORDEM_LOGRADOUROS):
+        if ref in normalized or normalized in ref:
+            return (idx, ref)
+    # Logradouros nao listados vao por ordem alfabetica no final
+    return (998, upper)
+
 def _gerar_pdf_idosos_html(pacientes, stats, data_analise, separar_por_endereco=False):
     """Gera HTML para PDF do relatorio de idosos.
-    Se separar_por_endereco=True, agrupa por bairro com subtitulos."""
+    Se separar_por_endereco=True, agrupa por logradouro na ordem personalizada."""
     from collections import OrderedDict
     agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
     logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
@@ -850,7 +874,7 @@ def _gerar_pdf_idosos_html(pacientes, stats, data_analise, separar_por_endereco=
         p["_logradouro"] = lograd
 
     if separar_por_endereco:
-        pacientes_sorted = sorted(pacientes, key=lambda x: (x["_bairro"], x["_logradouro"], x["nome"]))
+        pacientes_sorted = sorted(pacientes, key=lambda x: (_ordem_logradouro_key(x["_logradouro"]), x["nome"]))
     else:
         pacientes_sorted = pacientes
 
@@ -997,12 +1021,20 @@ table.dados td {{
     if separar_por_endereco:
         grupos = OrderedDict()
         for p in pacientes_sorted:
-            chave = p["_bairro"] if p["_bairro"] != "-" else "Sem bairro identificado"
-            if chave not in grupos:
-                grupos[chave] = []
-            grupos[chave].append(p)
-        for bairro_nome, grupo_pacientes in grupos.items():
-            html += f'<div class="section-title">{bairro_nome} ({len(grupo_pacientes)} idosos)</div>\n'
+            # Agrupar por logradouro (chave principal), mantendo bairro como dado auxiliar
+            lograd_key = p.get("_logradouro", "-") or "-"
+            if lograd_key == "-":
+                lograd_key = "Sem logradouro identificado"
+            if lograd_key not in grupos:
+                grupos[lograd_key] = {"bairro": p.get("_bairro", "-"), "pacientes": []}
+            grupos[lograd_key]["pacientes"].append(p)
+        for lograd_nome, dados_grupo in grupos.items():
+            grupo_pacientes = dados_grupo["pacientes"]
+            bairro_grupo = dados_grupo["bairro"]
+            inf_pend = sum(1 for p in grupo_pacientes if p["influenza"] == "NAO")
+            cov_pend = sum(1 for p in grupo_pacientes if p["covid"] == "NAO")
+            titulo_secao = f"{lograd_nome} - {bairro_grupo} ({len(grupo_pacientes)} idosos - {inf_pend} INFLUENZA pendentes - {cov_pend} COVID pendente)"
+            html += f'<div class="section-title">{titulo_secao}</div>\n'
             html += _render_table_header()
             for p in grupo_pacientes:
                 html += _render_row(p)
