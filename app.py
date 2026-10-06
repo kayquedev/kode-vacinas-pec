@@ -1026,19 +1026,17 @@ table.dados td {{
     if separar_por_endereco:
         grupos = OrderedDict()
         for p in pacientes_sorted:
-            # Agrupar por logradouro (chave principal), mantendo bairro como dado auxiliar
+            # Unificar SOMENTE por logradouro (bairro nao faz parte da chave)
             lograd_key = p.get("_logradouro", "-") or "-"
             if lograd_key == "-":
                 lograd_key = "Sem logradouro identificado"
             if lograd_key not in grupos:
-                grupos[lograd_key] = {"bairro": p.get("_bairro", "-"), "pacientes": []}
-            grupos[lograd_key]["pacientes"].append(p)
-        for lograd_nome, dados_grupo in grupos.items():
-            grupo_pacientes = dados_grupo["pacientes"]
-            bairro_grupo = dados_grupo["bairro"]
+                grupos[lograd_key] = []
+            grupos[lograd_key].append(p)
+        for lograd_nome, grupo_pacientes in grupos.items():
             inf_pend = sum(1 for p in grupo_pacientes if p["influenza"] == "NAO")
             cov_pend = sum(1 for p in grupo_pacientes if p["covid"] == "NAO")
-            titulo_secao = f"{lograd_nome} - {bairro_grupo} ({len(grupo_pacientes)} idosos - {inf_pend} INFLUENZA pendentes - {cov_pend} COVID pendente)"
+            titulo_secao = f"{lograd_nome} ({len(grupo_pacientes)} idosos - {inf_pend} INFLUENZA pendentes - {cov_pend} COVID pendente)"
             html += f'<div class="section-title">{titulo_secao}</div>\n'
             html += _render_table_header()
             for p in grupo_pacientes:
