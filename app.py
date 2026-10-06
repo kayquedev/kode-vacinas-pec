@@ -362,11 +362,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
             <div class="card-desc">Analise de vacinas para criancas (0-9 anos) e adolescentes (10-13 anos) conforme calendario PNI 2026.</div>
             <span class="card-badge badge-active">Disponivel</span>
         </a>
-        <a href="#" class="access-card" onclick="alert('Modulo de Idosos sera implementado em breve.'); return false;">
+        <a href="{{ url_for('idosos') }}" class="access-card">
             <div class="card-icon">&#128116;</div>
-            <div class="card-title">Idosos</div>
-            <div class="card-desc">Analise de vacinas para populacao idosa (60+ anos) conforme calendario PNI 2026.</div>
-            <span class="card-badge badge-soon">Em breve</span>
+            <div class="card-title">Idosos 60+</div>
+            <div class="card-desc">Acompanhamento de vacinacao Influenza e COVID para populacao idosa vinculada a microarea.</div>
+            <span class="card-badge badge-active">Disponivel</span>
         </a>
     </div>
     <div class="footer-home">Kode Vacinas PEC &copy; 2026 &mdash; Sistema de Apoio a Gestao Municipal</div>
@@ -673,6 +673,501 @@ function renderImunosRemover() {
 
 
 # ============================================================
+# MODULO IDOSOS (60+) - PARSING E LOGICA
+# ============================================================
+
+def _parse_csv_idosos(filepath):
+    """Le CSV do e-SUS PEC com encoding latin-1 e separador ponto-e-virgula.
+    Retorna lista de dicts com cabecalho normalizado."""
+    import csv
+    rows = []
+    with open(filepath, "r", encoding="latin-1") as f:
+        lines = f.readlines()
+    # Encontrar linha de cabecalho (contem 'Nome' como primeiro campo relevante)
+    header_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("Nome equipe;") or stripped.startswith("Nome do cidad") or stripped.startswith("Nome;"):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+    headers = [h.strip().strip('"') for h in lines[header_idx].split(";")]
+    for line in lines[header_idx + 1:]:
+        line = line.strip()
+        if not line:
+            continue
+        vals = line.split(";")
+        row = {}
+        for j, h in enumerate(headers):
+            if j < len(vals):
+                row[h] = vals[j].strip().strip('"')
+            else:
+                row[h] = ""
+        rows.append(row)
+    return rows
+
+
+def _normalizar_cpf(cpf_raw):
+    """Remove pontuacao do CPF para comparacao."""
+    if not cpf_raw:
+        return ""
+    return re.sub(r'[^\d]', '', cpf_raw)
+
+
+def _processar_idosos(vinculados_path, covid_path, influenza_path):
+    """Cruza os tres CSVs de idosos e retorna lista consolidada.
+
+    Logica:
+    - Base: todos os vinculados (IDOSOS 60+.csv)
+    - INFLUENZA: se coluna 'Influenza (ultimos 12 meses)' contem '-' ou 'Sem registro' => NAO (pendente); caso contrario => SIM
+    - COVID: apenas pacientes com Data da aplicacao em 2026 => SIM; demais => NAO (pendente)
+    """
+    # 1. Carregar vinculados (base)
+    vinculados = _parse_csv_idosos(vinculados_path)
+
+    # 2. Carregar COVID e indexar por CPF (apenas aplicacoes em 2026)
+    covid_rows = _parse_csv_idosos(covid_path)
+    covid_cpfs = set()
+    for row in covid_rows:
+        data_aplic = row.get("Data da aplicação", "")
+        # Verificar se a data contem 2026
+        if "2026" in data_aplic:
+            cpf = _normalizar_cpf(row.get("CPF", ""))
+            if cpf:
+                covid_cpfs.add(cpf)
+
+    # 3. Carregar Influenza e indexar por CPF
+    influenza_rows = _parse_csv_idosos(influenza_path)
+    influenza_map = {}
+    for row in influenza_rows:
+        cpf = _normalizar_cpf(row.get("CPF", ""))
+        if not cpf:
+            continue
+        col_influenza = ""
+        for key in row:
+            if "Influenza" in key and "12 meses" in key:
+                col_influenza = row[key]
+                break
+        # Se contem "-" ou "Sem registro" => NAO tomou; caso contrario => SIM
+        if not col_influenza or col_influenza.strip() == "-" or "Sem registro" in col_influenza:
+            influenza_map[cpf] = "NAO"
+        else:
+            influenza_map[cpf] = "SIM"
+
+    # 4. Consolidar: cada vinculado ganha colunas INFLUENZA e COVID
+    resultado = []
+    for v in vinculados:
+        cpf = _normalizar_cpf(v.get("CPF/CNS", ""))
+        nome = v.get("Nome", "").strip()
+        if not nome:
+            continue
+
+        # Influenza status
+        influenza_status = influenza_map.get(cpf, "NAO")
+
+        # COVID status
+        covid_status = "SIM" if cpf in covid_cpfs else "NAO"
+
+        endereco = v.get("Endereço", "-")
+        idade = v.get("Idade", "-")
+        micro = v.get("Microárea", "-")
+
+        resultado.append({
+            "nome": nome,
+            "cpf": cpf,
+            "cpf_formatado": v.get("CPF/CNS", "-"),
+            "idade": idade,
+            "endereco": endereco,
+            "micro": micro,
+            "influenza": influenza_status,
+            "covid": covid_status,
+        })
+
+    # Deduplicar por CPF (manter primeira ocorrencia)
+    vistos = set()
+    dedup = []
+    for p in resultado:
+        if p["cpf"] and p["cpf"] not in vistos:
+            vistos.add(p["cpf"])
+            dedup.append(p)
+        elif not p["cpf"]:
+            dedup.append(p)
+
+    return dedup
+
+
+def _gerar_pdf_idosos_html(pacientes, stats, data_analise):
+    """Gera HTML para PDF do relatorio de idosos."""
+    agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+    logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Vacinacao Idosos 60+ - Kode Vacinas PEC</title>
+<style>
+@page {{
+    size: A4 landscape;
+    margin: 1cm;
+}}
+body {{
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 9px;
+    color: #0f172a;
+    line-height: 1.3;
+}}
+.header-table {{
+    width: 100%;
+    border-collapse: collapse;
+    border-bottom: 2px solid #1e40af;
+    margin-bottom: 6px;
+    -pdf-keep-with-next: true;
+}}
+.header-table td {{
+    vertical-align: middle;
+    padding: 4px 0;
+}}
+.header-left {{ text-align: left; }}
+.header-right {{ text-align: right; width: 130px; }}
+.titulo {{ font-size: 14px; font-weight: bold; color: #1e40af; }}
+.info-line {{ font-size: 8px; color: #475569; margin-top: 3px; }}
+table.dados {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 4px;
+    font-size: 9px;
+}}
+table.dados th {{
+    background-color: #f8fafc;
+    padding: 4px 6px;
+    text-align: left;
+    font-weight: bold;
+    border-bottom: 2px solid #1e40af;
+    color: #1e3a8a;
+    font-size: 8px;
+}}
+table.dados td {{
+    padding: 4px 6px;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: top;
+    font-size: 9px;
+    color: #0f172a;
+}}
+.status-sim {{
+    display: inline;
+    background-color: #d1fae5;
+    color: #065f46;
+    padding: 1px 6px;
+    font-size: 8px;
+    font-weight: bold;
+}}
+.status-nao {{
+    display: inline;
+    background-color: #fee2e2;
+    color: #991b1b;
+    padding: 1px 6px;
+    font-size: 8px;
+    font-weight: bold;
+}}
+.footer {{
+    margin-top: 8px;
+    padding-top: 4px;
+    border-top: 1px solid #94a3b8;
+    font-size: 7px;
+    color: #64748b;
+    text-align: center;
+}}
+</style>
+</head>
+<body>
+<table class="header-table">
+<tr>
+<td class="header-left">
+<span class="titulo">VACINACAO - IDOSOS 60+</span>
+<div class="info-line">EMITIDO POR: Administrador, EM: {agora} | TOTAL: {stats['total']} IDOSOS | INFLUENZA PENDENTE: {stats['influenza_pendente']} | COVID PENDENTE: {stats['covid_pendente']}</div>
+</td>
+<td class="header-right">{logo_img}</td>
+</tr>
+</table>
+<table class="dados">
+<thead>
+<tr>
+    <th style="width: 25%;">NOME</th>
+    <th style="width: 14%;">CPF</th>
+    <th style="width: 12%;">IDADE</th>
+    <th style="width: 6%;">MICRO</th>
+    <th style="width: 25%;">ENDERECO</th>
+    <th style="width: 9%;">INFLUENZA</th>
+    <th style="width: 9%;">COVID</th>
+</tr>
+</thead>
+<tbody>
+"""
+    for p in pacientes:
+        inf_class = "status-sim" if p["influenza"] == "SIM" else "status-nao"
+        cov_class = "status-sim" if p["covid"] == "SIM" else "status-nao"
+        nome = p["nome"][:45]
+        endereco = p["endereco"][:40]
+        html += f"""
+<tr>
+    <td><b>{nome}</b></td>
+    <td>{p['cpf_formatado']}</td>
+    <td>{p['idade'][:20]}</td>
+    <td>{p['micro']}</td>
+    <td>{endereco}</td>
+    <td><span class="{inf_class}">{p['influenza']}</span></td>
+    <td><span class="{cov_class}">{p['covid']}</span></td>
+</tr>
+"""
+    html += f"""
+</tbody>
+</table>
+<div class="footer">
+    Vacinacao Idosos 60+ - KODE VACINAS PEC - Sistema de Apoio a Gestao Municipal<br/>
+    Documento gerado automaticamente em {agora}
+</div>
+</body>
+</html>
+"""
+    return html
+
+
+# Armazena resultado da analise de idosos em memoria
+_ultimo_resultado_idosos = None
+
+
+# ============================================================
+# TEMPLATE DA FERRAMENTA DE IDOSOS
+# ============================================================
+IDOSOS_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kode Vacinas PEC - Idosos 60+</title>
+<style>
+:root {
+    --primary: #1e40af;
+    --primary-dark: #1e3a8a;
+    --primary-light: #eff6ff;
+    --secondary: #4338ca;
+    --secondary-light: #eef2ff;
+    --bg: #f8fafc;
+    --card-bg: #ffffff;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --text-secondary: #475569;
+    --border: #e2e8f0;
+    --success: #059669;
+    --success-light: #d1fae5;
+    --warning: #d97706;
+    --warning-light: #fffbeb;
+    --danger: #dc2626;
+    --danger-light: #fee2e2;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+header { background: var(--primary); color: white; padding: 12px 0; margin-bottom: 24px; }
+header .container { display: flex; align-items: center; gap: 15px; }
+header .logo-sm { height: 32px; background: white; border-radius: 4px; padding: 2px; }
+header h1 { font-size: 1.3rem; font-weight: 600; }
+header .subtitle { opacity: 0.9; font-size: 0.85rem; }
+header .back-link { margin-left: auto; color: white; text-decoration: none; font-size: 0.85rem; opacity: 0.8; }
+header .back-link:hover { opacity: 1; text-decoration: underline; }
+.card { background: var(--card-bg); border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.card h2 { font-size: 1.2rem; margin-bottom: 16px; color: var(--primary); }
+.upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 40px; text-align: center; transition: all 0.2s; cursor: pointer; }
+.upload-area:hover, .upload-area.dragover { border-color: var(--primary); background: var(--primary-light); }
+.upload-area input[type="file"] { display: none; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-size: 0.9rem; text-decoration: none; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-success { background: var(--success); color: white; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+.btn-outline:hover { background: var(--bg); border-color: var(--primary); color: var(--primary); }
+.btn-pdf { background: var(--secondary); color: white; }
+.btn-pdf:hover { background: var(--secondary); opacity: 0.9; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.stat-card { background: var(--bg); border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border); }
+.stat-value { font-size: 1.8rem; font-weight: 700; color: var(--primary); }
+.stat-label { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+.stat-danger { color: var(--danger); }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th { background: var(--bg); padding: 10px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--primary); position: sticky; top: 0; z-index: 10; color: var(--text); }
+td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-secondary); }
+tr:hover { background: var(--primary-light); }
+.status-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.status-sim { background: var(--success-light); color: #065f46; }
+.status-nao { background: var(--danger-light); color: #991b1b; }
+.alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+.alert-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.alert-success { background: var(--success-light); color: #065f46; border: 1px solid #a7f3d0; }
+.file-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.file-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg); border-radius: 6px; font-size: 0.85rem; border: 1px solid var(--border); }
+.file-icon { color: var(--success); }
+.actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.filters-panel { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid var(--border); }
+.filters-panel h3 { font-size: 1rem; color: var(--primary); margin-bottom: 16px; }
+.filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.filter-group label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; color: var(--text); }
+.filter-group input, .filter-group select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; color: var(--text); background: white; }
+.filter-actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
+@media (max-width: 768px) {
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .filters-grid { grid-template-columns: 1fr; }
+    table { font-size: 0.75rem; }
+    th, td { padding: 6px 4px; }
+}
+</style>
+</head>
+<body>
+<header>
+<div class="container">
+    {% if logo_b64 %}<img src="data:image/png;base64,{{ logo_b64 }}" class="logo-sm" alt="Logo">{% endif %}
+    <div>
+        <h1>Kode Vacinas PEC - Idosos 60+</h1>
+        <div class="subtitle">Acompanhamento de vacinacao Influenza e COVID para populacao idosa</div>
+    </div>
+    <a href="{{ url_for('home') }}" class="back-link">&larr; Voltar ao Inicio</a>
+</div>
+</header>
+<div class="container">
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for category, message in messages %}
+<div class="alert alert-{{ category }}">{{ message }}</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+{% if not resultado %}
+<div class="card">
+<h2>Upload dos CSVs do e-SUS PEC (Idosos 60+)</h2>
+<form method="POST" enctype="multipart/form-data" id="uploadForm">
+    <div class="upload-area" id="dropZone" onclick="document.getElementById('csvFiles').click()">
+        <p style="font-size: 1.1rem; margin-bottom: 8px;">Clique ou arraste os 3 arquivos CSV aqui</p>
+        <p style="color: var(--text-muted); font-size: 0.85rem;">IDOSOS 60+.csv | COVID 60+ APLICADAS.csv | influenza 60+.csv</p>
+        <input type="file" id="csvFiles" name="csvs" multiple accept=".csv" required>
+    </div>
+    <div class="file-list" id="fileList"></div>
+    <div class="actions">
+        <button type="submit" class="btn btn-primary" id="analyzeBtn">Analisar Idosos</button>
+    </div>
+</form>
+</div>
+{% else %}
+<div class="stats-grid">
+    <div class="stat-card"><div class="stat-value">{{ stats.total }}</div><div class="stat-label">Total Idosos</div></div>
+    <div class="stat-card"><div class="stat-value stat-danger">{{ stats.influenza_pendente }}</div><div class="stat-label">Influenza Pendente</div></div>
+    <div class="stat-card"><div class="stat-value stat-danger">{{ stats.covid_pendente }}</div><div class="stat-label">COVID Pendente</div></div>
+    <div class="stat-card"><div class="stat-value">{{ stats.ambos_ok }}</div><div class="stat-label">Ambos OK</div></div>
+</div>
+
+<div class="filters-panel">
+<h3>Filtros e Exportacao</h3>
+<form method="GET" action="{{ url_for('idosos') }}" id="filterForm">
+    <div class="filters-grid">
+        <div class="filter-group">
+            <label for="filtro_influenza">Influenza</label>
+            <select id="filtro_influenza" name="filtro_influenza">
+                <option value="">Todos</option>
+                <option value="SIM" {{ 'selected' if filtros.filtro_influenza == 'SIM' }}>SIM (Aplicado)</option>
+                <option value="NAO" {{ 'selected' if filtros.filtro_influenza == 'NAO' }}>NAO (Pendente)</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="filtro_covid">COVID</label>
+            <select id="filtro_covid" name="filtro_covid">
+                <option value="">Todos</option>
+                <option value="SIM" {{ 'selected' if filtros.filtro_covid == 'SIM' }}>SIM (Aplicado 2026)</option>
+                <option value="NAO" {{ 'selected' if filtros.filtro_covid == 'NAO' }}>NAO (Pendente)</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="busca_nome">Nome contem</label>
+            <input type="text" id="busca_nome" name="busca_nome" value="{{ filtros.busca_nome or '' }}" placeholder="Ex: maria, silva...">
+        </div>
+        <div class="filter-group">
+            <label for="busca_micro">Microarea</label>
+            <input type="text" id="busca_micro" name="busca_micro" value="{{ filtros.busca_micro or '' }}" placeholder="Ex: 06">
+        </div>
+    </div>
+    <div class="filter-actions">
+        <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
+        <a href="{{ url_for('idosos') }}" class="btn btn-outline">Limpar Filtros</a>
+        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '') }}" class="btn btn-pdf">Baixar PDF</a>
+        <a href="{{ url_for('nova_analise_idosos') }}" class="btn btn-outline">Nova Analise</a>
+    </div>
+</form>
+</div>
+
+<div class="card" style="overflow-x: auto;">
+<table>
+<thead>
+<tr>
+    <th style="min-width: 220px;">Nome</th>
+    <th style="min-width: 130px;">CPF</th>
+    <th style="min-width: 120px;">Idade</th>
+    <th style="min-width: 50px;">Micro</th>
+    <th style="min-width: 200px;">Endereco</th>
+    <th style="min-width: 90px;">Influenza</th>
+    <th style="min-width: 90px;">COVID</th>
+</tr>
+</thead>
+<tbody>
+{% for p in resultado %}
+<tr>
+    <td><strong>{{ p.nome }}</strong></td>
+    <td>{{ p.cpf_formatado }}</td>
+    <td>{{ p.idade }}</td>
+    <td>{{ p.micro }}</td>
+    <td>{{ p.endereco }}</td>
+    <td><span class="status-badge status-{{ p.influenza|lower }}">{{ p.influenza }}</span></td>
+    <td><span class="status-badge status-{{ p.covid|lower }}">{{ p.covid }}</span></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endif %}
+</div>
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('csvFiles');
+const fileList = document.getElementById('fileList');
+if (dropZone) {
+    ['dragenter', 'dragover'].forEach(e => {
+        dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.add('dragover'); });
+    });
+    ['dragleave', 'drop'].forEach(e => {
+        dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.remove('dragover'); });
+    });
+    dropZone.addEventListener('drop', (ev) => {
+        fileInput.files = ev.dataTransfer.files;
+        updateFileList();
+    });
+    fileInput.addEventListener('change', updateFileList);
+}
+function updateFileList() {
+    if (!fileList) return;
+    fileList.innerHTML = '';
+    Array.from(fileInput.files).forEach(f => {
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        div.innerHTML = '<span class="file-icon">&#10003;</span> ' + f.name + ' (' + (f.size/1024).toFixed(1) + ' KB)';
+        fileList.appendChild(div);
+    });
+}
+</script>
+</body>
+</html>
+"""
+
+# ============================================================
 # ROTAS
 # ============================================================
 
@@ -845,6 +1340,148 @@ def download_pdf():
         mimetype="application/pdf",
         as_attachment=True,
         download_name=f"vacinacao_imunos_{date.today().isoformat()}.pdf",
+    )
+
+
+# ============================================================
+# ROTAS IDOSOS 60+
+# ============================================================
+
+@app.route("/idosos", methods=["GET", "POST"])
+def idosos():
+    """Ferramenta de vacinacao para idosos 60+."""
+    global _ultimo_resultado_idosos
+
+    filtros = {
+        "filtro_influenza": request.args.get("filtro_influenza", ""),
+        "filtro_covid": request.args.get("filtro_covid", ""),
+        "busca_nome": request.args.get("busca_nome", ""),
+        "busca_micro": request.args.get("busca_micro", ""),
+    }
+
+    if request.method == "POST":
+        files = request.files.getlist("csvs")
+        if len(files) < 3:
+            flash("Selecione os 3 arquivos CSV (IDOSOS 60+, COVID 60+ APLICADAS, influenza 60+).", "error")
+            return redirect(url_for("idosos"))
+
+        import tempfile
+        tmpdir = tempfile.mkdtemp()
+        paths = {}
+        for f in files:
+            fname = f.filename.lower()
+            save_path = os.path.join(tmpdir, f.filename)
+            f.save(save_path)
+            if "idosos" in fname and "60" in fname and "covid" not in fname and "influenza" not in fname:
+                paths["vinculados"] = save_path
+            elif "covid" in fname:
+                paths["covid"] = save_path
+            elif "influenza" in fname or "gripe" in fname:
+                paths["influenza"] = save_path
+
+        if not all(k in paths for k in ("vinculados", "covid", "influenza")):
+            flash("Nao foi possivel identificar os 3 arquivos. Verifique os nomes.", "error")
+            return redirect(url_for("idosos"))
+
+        try:
+            resultado = _processar_idosos(paths["vinculados"], paths["covid"], paths["influenza"])
+            _ultimo_resultado_idosos = resultado
+            flash(f"Analise concluida! {len(resultado)} idosos processados.", "success")
+        except Exception as e:
+            flash(f"Erro ao processar arquivos: {e}", "error")
+            return redirect(url_for("idosos"))
+
+    if not _ultimo_resultado_idosos:
+        return render_template_string(IDOSOS_TEMPLATE, resultado=None, filtros=filtros, stats={}, logo_b64=_LOGO_B64)
+
+    # Aplicar filtros
+    pacientes = _ultimo_resultado_idosos
+    if filtros["filtro_influenza"]:
+        pacientes = [p for p in pacientes if p["influenza"] == filtros["filtro_influenza"]]
+    if filtros["filtro_covid"]:
+        pacientes = [p for p in pacientes if p["covid"] == filtros["filtro_covid"]]
+    if filtros["busca_nome"]:
+        termo = filtros["busca_nome"].lower()
+        pacientes = [p for p in pacientes if termo in p["nome"].lower()]
+    if filtros["busca_micro"]:
+        pacientes = [p for p in pacientes if filtros["busca_micro"] in p["micro"]]
+
+    total = len(_ultimo_resultado_idosos)
+    influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
+    covid_pendente = sum(1 for p in _ultimo_resultado_idosos if p["covid"] == "NAO")
+    ambos_ok = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "SIM" and p["covid"] == "SIM")
+
+    stats = {
+        "total": total,
+        "influenza_pendente": influenza_pendente,
+        "covid_pendente": covid_pendente,
+        "ambos_ok": ambos_ok,
+    }
+
+    return render_template_string(IDOSOS_TEMPLATE, resultado=pacientes, filtros=filtros, stats=stats, logo_b64=_LOGO_B64)
+
+
+@app.route("/nova-analise-idosos")
+def nova_analise_idosos():
+    """Limpa resultado de idosos e volta para upload."""
+    global _ultimo_resultado_idosos
+    _ultimo_resultado_idosos = None
+    return redirect(url_for("idosos"))
+
+
+@app.route("/download-pdf-idosos")
+def download_pdf_idosos():
+    """Gera PDF do relatorio de idosos 60+."""
+    global _ultimo_resultado_idosos
+    if not _ultimo_resultado_idosos:
+        flash("Nenhum resultado disponivel para exportacao PDF.", "error")
+        return redirect(url_for("idosos"))
+
+    filtros = {
+        "filtro_influenza": request.args.get("filtro_influenza", ""),
+        "filtro_covid": request.args.get("filtro_covid", ""),
+        "busca_nome": request.args.get("busca_nome", ""),
+        "busca_micro": request.args.get("busca_micro", ""),
+    }
+
+    pacientes = _ultimo_resultado_idosos
+    if filtros["filtro_influenza"]:
+        pacientes = [p for p in pacientes if p["influenza"] == filtros["filtro_influenza"]]
+    if filtros["filtro_covid"]:
+        pacientes = [p for p in pacientes if p["covid"] == filtros["filtro_covid"]]
+    if filtros["busca_nome"]:
+        termo = filtros["busca_nome"].lower()
+        pacientes = [p for p in pacientes if termo in p["nome"].lower()]
+    if filtros["busca_micro"]:
+        pacientes = [p for p in pacientes if filtros["busca_micro"] in p["micro"]]
+
+    total = len(_ultimo_resultado_idosos)
+    influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
+    covid_pendente = sum(1 for p in _ultimo_resultado_idosos if p["covid"] == "NAO")
+
+    stats = {
+        "total": total,
+        "influenza_pendente": influenza_pendente,
+        "covid_pendente": covid_pendente,
+    }
+
+    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat())
+    try:
+        from xhtml2pdf import pisa
+        pdf_buffer = io.BytesIO()
+        pisa_status = pisa.CreatePDF(pdf_html, dest=pdf_buffer)
+        if pisa_status.err:
+            flash("Erro ao gerar PDF. Retornando HTML para impressao.", "warning")
+            return pdf_html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        pdf_bytes = pdf_buffer.getvalue()
+    except ImportError:
+        flash("xhtml2pdf nao instalado no servidor. Retornando HTML para impressao.", "warning")
+        return pdf_html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"vacinacao_idosos_{date.today().isoformat()}.pdf",
     )
 
 
