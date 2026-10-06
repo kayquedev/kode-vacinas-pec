@@ -1331,7 +1331,7 @@ tr:hover { background: var(--primary-light); }
     <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
         <a href="{{ url_for('idosos') }}" class="btn btn-outline">Limpar Filtros</a>
-        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '', mostrar_observacao=filtros.get('mostrar_observacao', '1')) }}" class="btn btn-pdf">Baixar PDF</a>
+        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '', mostrar_observacao=filtros.get('mostrar_observacao', '1'), excluir_cpfs=','.join(filtros.excluir_cpfs) if filtros.excluir_cpfs else '') }}" class="btn btn-pdf" id="btn-download-pdf-idosos">Baixar PDF</a>
         <a href="{{ url_for('nova_analise_idosos') }}" class="btn btn-outline">Nova Analise</a>
     </div>
 </form>
@@ -1433,6 +1433,13 @@ function renderExcluidosIdosos() {
         container.appendChild(chip);
     });
     input.value = Array.from(cpfsExcluidosIdosos).join(',');
+    // Atualizar link do botao Baixar PDF com excluir_cpfs
+    const btnPdf = document.getElementById('btn-download-pdf-idosos');
+    if (btnPdf) {
+        const url = new URL(btnPdf.href, window.location.origin);
+        url.searchParams.set('excluir_cpfs', Array.from(cpfsExcluidosIdosos).join(','));
+        btnPdf.href = url.pathname + url.search;
+    }
 }
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.btn-excluir-cidadao-idoso').forEach(btn => {
