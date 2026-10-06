@@ -163,7 +163,7 @@ body {{
 .header-table {{
     width: 100%;
     border-collapse: collapse;
-    border-bottom: 2px solid #2563eb;
+    border-bottom: 2px solid #1e40af;
     margin-bottom: 6px;
     -pdf-keep-with-next: true;
 }}
@@ -181,7 +181,7 @@ body {{
 .titulo {{
     font-size: 14px;
     font-weight: bold;
-    color: #2563eb;
+    color: #1e40af;
 }}
 .info-line {{
     font-size: 8px;
@@ -189,7 +189,7 @@ body {{
     margin-top: 3px;
 }}
 .grupo-header {{
-    background-color: #2563eb;
+    background-color: #1e40af;
     color: white;
     padding: 3px 8px;
     margin-bottom: 2px;
@@ -209,8 +209,8 @@ table.dados th {{
     padding: 4px 6px;
     text-align: left;
     font-weight: bold;
-    border-bottom: 2px solid #2563eb;
-    color: #1d4ed8;
+    border-bottom: 2px solid #1e40af;
+    color: #1e3a8a;
     font-size: 8px;
 }}
 table.dados td {{
@@ -223,7 +223,7 @@ table.dados td {{
 .imuno-tag {{
     display: inline;
     background-color: #eff6ff;
-    color: #1d4ed8;
+    color: #1e3a8a;
     padding: 1px 4px;
     font-size: 8px;
     margin-right: 2px;
@@ -309,8 +309,8 @@ HOME_TEMPLATE = """
 <title>Kode Vacinas PEC - Inicio</title>
 <style>
 :root {
-    --primary: #2563eb;
-    --primary-dark: #1d4ed8;
+    --primary: #1e40af;
+    --primary-dark: #1e3a8a;
     --primary-light: #eff6ff;
     --secondary: #4338ca;
     --secondary-light: #eef2ff;
@@ -387,8 +387,8 @@ VACINAS_TEMPLATE = """
 <title>Kode Vacinas PEC - Analisador de Vacinacao</title>
 <style>
 :root {
-    --primary: #2563eb;
-    --primary-dark: #1d4ed8;
+    --primary: #1e40af;
+    --primary-dark: #1e3a8a;
     --primary-light: #eff6ff;
     --secondary: #4338ca;
     --secondary-light: #eef2ff;
