@@ -225,7 +225,7 @@ table.dados td {{
     background-color: #eff6ff;
     color: #1e3a8a;
     padding: 1px 4px;
-    font-size: 8px;
+    font-size: 9px;
     margin-right: 2px;
 }}
 .footer {{
