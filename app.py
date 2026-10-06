@@ -944,15 +944,8 @@ def _extrair_logradouro(endereco_raw):
     return "-"
 
 
-def _gerar_pdf_idosos_html(pacientes, stats, data_analise, mostrar_observacao=True):
-    """Gera HTML para PDF do relatorio de idosos, separado por logradouro.
-
-    Args:
-        pacientes: lista de dicts com dados dos pacientes
-        stats: dict com estatisticas
-        data_analise: string da data
-        mostrar_observacao: se True, inclui coluna OBSERVACAO no PDF
-    """
+def _gerar_pdf_idosos_html(pacientes, stats, data_analise):
+    """Gera HTML para PDF do relatorio de idosos, separado por logradouro."""
     from collections import OrderedDict
     agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
     logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
@@ -971,19 +964,11 @@ def _gerar_pdf_idosos_html(pacientes, stats, data_analise, mostrar_observacao=Tr
 
     pacientes_sorted = pacientes
 
-    # Larguras das colunas ajustadas conforme presenca de OBSERVACAO
-    if mostrar_observacao:
-        col_widths = {
-            "nome": "18%", "cpf": "11%", "idade": "8%", "micro": "5%",
-            "endereco": "18%", "influenza": "7%", "covid": "7%",
-            "covid_ultima": "10%", "observacao": "16%",
-        }
-    else:
-        col_widths = {
-            "nome": "22%", "cpf": "12%", "idade": "10%", "micro": "5%",
-            "endereco": "22%", "influenza": "8%", "covid": "8%",
-            "covid_ultima": "13%",
-        }
+    col_widths = {
+        "nome": "22%", "cpf": "12%", "idade": "10%", "micro": "5%",
+        "endereco": "22%", "influenza": "8%", "covid": "8%",
+        "covid_ultima": "13%",
+    }
 
     html = f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -1063,11 +1048,6 @@ table.dados td {{
     font-size: 8px;
     font-weight: bold;
 }}
-.obs-cell {{
-    font-size: 8px;
-    color: #475569;
-    font-style: italic;
-}}
 .covid-data-cell {{
     font-size: 8px;
     color: #1e40af;
@@ -1096,7 +1076,6 @@ table.dados td {{
 """
 
     def _render_table_header():
-        obs_col = f'\n    <th style="width: {col_widths["observacao"]};">OBSERVACAO</th>' if mostrar_observacao else ""
         return f"""<table class="dados">
 <thead>
 <tr>
@@ -1107,7 +1086,7 @@ table.dados td {{
     <th style="width: {col_widths['endereco']};">ENDERECO</th>
     <th style="width: {col_widths['influenza']};">INFLUENZA</th>
     <th style="width: {col_widths['covid']};">COVID</th>
-    <th style="width: {col_widths['covid_ultima']};">ULTIMA COVID</th>{obs_col}
+    <th style="width: {col_widths['covid_ultima']};">ULTIMA COVID</th>
 </tr>
 </thead>
 <tbody>
@@ -1119,7 +1098,6 @@ table.dados td {{
         nome = p["nome"][:40]
         endereco = p["endereco"][:35]
         covid_ultima = p.get("covid_ultima", "")
-        obs_td = f'\n    <td class="obs-cell">{p.get("observacao", "")[:30]}</td>' if mostrar_observacao else ""
         return f"""<tr>
     <td><b>{nome}</b></td>
     <td>{p['cpf_formatado']}</td>
@@ -1128,7 +1106,7 @@ table.dados td {{
     <td>{endereco}</td>
     <td><span class="{inf_class}">{p['influenza']}</span></td>
     <td><span class="{cov_class}">{p['covid']}</span></td>
-    <td class="covid-data-cell">{covid_ultima}</td>{obs_td}
+    <td class="covid-data-cell">{covid_ultima}</td>
 </tr>
 """
 
@@ -1321,17 +1299,13 @@ tr:hover { background: var(--primary-light); }
                     <input type="checkbox" id="remover_ambos_sim" name="remover_ambos_sim" value="1" {{ 'checked' if filtros.remover_ambos_sim == '1' }}>
                     Remover ambos SIM
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
-                    <input type="checkbox" id="mostrar_observacao" name="mostrar_observacao" value="1" {{ 'checked' if filtros.get('mostrar_observacao', '1') == '1' }}>
-                    Mostrar coluna Observacao no PDF
-                </label>
                 </div>
         </div>
     </div>
     <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
         <a href="{{ url_for('idosos') }}" class="btn btn-outline">Limpar Filtros</a>
-        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '', mostrar_observacao=filtros.get('mostrar_observacao', '1'), excluir_cpfs=','.join(filtros.excluir_cpfs) if filtros.excluir_cpfs else '') }}" class="btn btn-pdf" id="btn-download-pdf-idosos">Baixar PDF</a>
+        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '', excluir_cpfs=','.join(filtros.excluir_cpfs) if filtros.excluir_cpfs else '') }}" class="btn btn-pdf" id="btn-download-pdf-idosos">Baixar PDF</a>
         <a href="{{ url_for('nova_analise_idosos') }}" class="btn btn-outline">Nova Analise</a>
     </div>
 </form>
@@ -1359,7 +1333,6 @@ tr:hover { background: var(--primary-light); }
     <th style="min-width: 90px;">Influenza</th>
     <th style="min-width: 90px;">COVID</th>
     <th style="min-width: 100px;">Última COVID</th>
-    <th style="min-width: 120px;">Observacao</th>
 </tr>
 </thead>
 <tbody>
@@ -1373,7 +1346,6 @@ tr:hover { background: var(--primary-light); }
     <td><span class="status-badge status-{{ p.influenza|lower }}">{{ p.influenza }}</span></td>
     <td><span class="status-badge status-{{ p.covid|lower }}">{{ p.covid }}</span></td>
     <td style="font-size:0.8rem;color:#1e40af;font-weight:600;">{{ p.get('covid_ultima', '') }}</td>
-    <td style="font-size:0.8rem;color:var(--text-muted);">{{ p.get('observacao', '') }}</td>
 </tr>
 {% endfor %}
 </tbody>
@@ -1688,7 +1660,6 @@ def idosos():
         "busca_nome": request.args.get("busca_nome", ""),
         "busca_micro": request.args.get("busca_micro", ""),
         "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
-        "mostrar_observacao": request.args.get("mostrar_observacao", "1"),
         "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
     }
 
@@ -1742,11 +1713,6 @@ def idosos():
         pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
     if filtros["excluir_cpfs"]:
         pacientes = [p for p in pacientes if p.get("cpf_formatado", "") not in filtros["excluir_cpfs"]]
-
-    # Garantir campo observacao existe
-    for p in pacientes:
-        if "observacao" not in p:
-            p["observacao"] = ""
 
     total = len(_ultimo_resultado_idosos)
     influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
@@ -1824,11 +1790,6 @@ def download_pdf_idosos():
                 if "covid" in vacinas_excluidas or "COVID" in vacinas_excluidas:
                     p["covid"] = "-"
 
-    # Garantir campo observacao existe
-    for p in pacientes:
-        if "observacao" not in p:
-            p["observacao"] = ""
-
     total = len(_ultimo_resultado_idosos)
     influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
     covid_pendente = sum(1 for p in _ultimo_resultado_idosos if p["covid"] == "NAO")
@@ -1839,8 +1800,7 @@ def download_pdf_idosos():
         "covid_pendente": covid_pendente,
     }
 
-    mostrar_observacao = request.args.get("mostrar_observacao", "1") == "1"
-    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat(), mostrar_observacao=mostrar_observacao)
+    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat())
     try:
         from xhtml2pdf import pisa
         pdf_buffer = io.BytesIO()
