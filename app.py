@@ -798,14 +798,23 @@ def _processar_idosos(vinculados_path, covid_path, influenza_path):
 
 
 def _extrair_bairro_logradouro(endereco_raw):
-    """Extrai bairro e logradouro do campo de endereco do e-SUS PEC."""
+    """Extrai bairro e logradouro do campo de endereco do e-SUS PEC.
+    Quando bairro for ZONA RURAL, usa o nome da area/localidade como chave de agrupamento."""
     if not endereco_raw or endereco_raw.strip() == "-":
         return ("-", "-")
     partes = endereco_raw.split("|")[0].strip()
     bairro = "-"
     logradouro = partes
+    # Padrao e-SUS: "Area NOME, S/N. CASA - ZONA RURAL, Municipio"
+    # ou "Rua X, 123. CASA - BONFIM, Municipio"
+    match_area = re.search(r'^(?:Area|Área)\s+([A-Z][A-Z\s]+?),\s', partes, re.IGNORECASE)
     match_bairro = re.search(r'\s-\s([A-Z][A-Z\s]+?),\s', partes)
-    if match_bairro:
+    if match_area:
+        # Extrai nome da area (MORRO AGUDO, JACARE, MOINHOS, etc.)
+        area_nome = match_area.group(1).strip().upper()
+        bairro = f"Area {area_nome}"
+        logradouro = partes[match_area.end():].strip() if match_area.end() < len(partes) else partes
+    elif match_bairro:
         bairro = match_bairro.group(1).strip()
         logradouro = partes[:match_bairro.start()].strip()
     else:
@@ -816,10 +825,16 @@ def _extrair_bairro_logradouro(endereco_raw):
                 if possivel_bairro and len(possivel_bairro) < 30:
                     bairro = possivel_bairro
                 logradouro = ",".join(segmentos[:-1]).strip()
+    # Se bairro for ZONA RURAL generico, tentar extrair localidade do logradouro
+    if bairro.upper() in ("ZONA RURAL", "-"):
+        # Tentar pegar nome da area/localidade do inicio do logradouro
+        match_local = re.match(r'^(?:Area|Área)\s+([A-Z][A-Z\s]+)', logradouro, re.IGNORECASE)
+        if match_local:
+            bairro = f"Area {match_local.group(1).strip().upper()}"
     logradouro_limpo = re.sub(r'\.\s*(CASA|APARTAMENTO|APT|FUNDO|FUNDOS|TERREO)\s*\d*', '.', logradouro, flags=re.IGNORECASE).strip()
     if logradouro_limpo.endswith("."):
         logradouro_limpo = logradouro_limpo[:-1].strip()
-    return (logradouro_limpo[:50], bairro[:25])
+    return (logradouro_limpo[:50], bairro[:30])
 
 
 def _gerar_pdf_idosos_html(pacientes, stats, data_analise, separar_por_endereco=False):
@@ -1170,17 +1185,18 @@ tr:hover { background: var(--primary-light); }
             <label for="busca_micro">Microarea</label>
             <input type="text" id="busca_micro" name="busca_micro" value="{{ filtros.busca_micro or '' }}" placeholder="Ex: 06">
         </div>
-    </div>
-    <div class="filter-group">
-            <label for="remover_ambos_sim">Opcoes PDF</label>
-            <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:4px;cursor:pointer;">
-                <input type="checkbox" id="remover_ambos_sim" name="remover_ambos_sim" value="1" {{ 'checked' if filtros.remover_ambos_sim == '1' }}>
-                Remover ambos SIM
-            </label>
-            <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:4px;cursor:pointer;">
-                <input type="checkbox" id="separar_bairro" name="separar_bairro" value="1" {{ 'checked' if filtros.separar_bairro == '1' }}>
-                Separar por bairro
-            </label>
+        <div class="filter-group">
+            <label>Opcoes PDF</label>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+                    <input type="checkbox" id="remover_ambos_sim" name="remover_ambos_sim" value="1" {{ 'checked' if filtros.remover_ambos_sim == '1' }}>
+                    Remover ambos SIM
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+                    <input type="checkbox" id="separar_bairro" name="separar_bairro" value="1" {{ 'checked' if filtros.separar_bairro == '1' }}>
+                    Separar por logradouro/bairro
+                </label>
+            </div>
         </div>
     </div>
     <div class="filter-actions">
