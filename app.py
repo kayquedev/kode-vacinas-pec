@@ -866,9 +866,10 @@ def _ordem_logradouro_key(logradouro_raw):
     # Logradouros nao listados vao por ordem alfabetica no final
     return (998, upper)
 
-def _gerar_pdf_idosos_html(pacientes, stats, data_analise, separar_por_endereco=False):
+def _gerar_pdf_idosos_html(pacientes, stats, data_analise, separar_por_endereco=False, ordem_logradouros=None):
     """Gera HTML para PDF do relatorio de idosos.
-    Se separar_por_endereco=True, agrupa por logradouro na ordem personalizada."""
+    Se separar_por_endereco=True, agrupa por logradouro.
+    Se ordem_logradouros for fornecida (lista), usa essa ordem exata para agrupamento."""
     from collections import OrderedDict
     agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
     logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
@@ -878,7 +879,11 @@ def _gerar_pdf_idosos_html(pacientes, stats, data_analise, separar_por_endereco=
         p["_bairro"] = bairro
         p["_logradouro"] = lograd
 
-    if separar_por_endereco:
+    if separar_por_endereco and ordem_logradouros:
+        # Ordenar pela ordem definida pelo usuario
+        ordem_map = {lograd: idx for idx, lograd in enumerate(ordem_logradouros)}
+        pacientes_sorted = sorted(pacientes, key=lambda x: (ordem_map.get(x["_logradouro"], 9999), x["nome"]))
+    elif separar_por_endereco:
         pacientes_sorted = sorted(pacientes, key=lambda x: (_ordem_logradouro_key(x["_logradouro"]), x["nome"]))
     else:
         pacientes_sorted = pacientes
@@ -1229,18 +1234,89 @@ tr:hover { background: var(--primary-light); }
                 </label>
                 <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
                     <input type="checkbox" id="separar_bairro" name="separar_bairro" value="1" {{ 'checked' if filtros.separar_bairro == '1' }}>
-                    Separar por logradouro/bairro
+                    Separar por logradouro
                 </label>
             </div>
         </div>
     </div>
+    {% if logradouros_disponiveis %}
+    <div style="margin-top:16px;">
+        <label style="display:block;font-size:0.85rem;font-weight:500;margin-bottom:8px;color:var(--text);">Ordem dos Logradouros no PDF (arraste para reordenar)</label>
+        <div id="logradouroList" style="display:flex;flex-wrap:wrap;gap:6px;max-height:200px;overflow-y:auto;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;">
+            {% for lograd in logradouros_disponiveis %}
+            <div class="lograd-item" draggable="true" data-value="{{ lograd }}" style="padding:4px 10px;background:white;border:1px solid var(--border);border-radius:4px;font-size:0.8rem;cursor:grab;user-select:none;">{{ lograd }}</div>
+            {% endfor %}
+        </div>
+        <input type="hidden" id="ordem_logradouros_input" name="ordem_logradouros" value="">
+    </div>
+    {% endif %}
     <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
         <a href="{{ url_for('idosos') }}" class="btn btn-outline">Limpar Filtros</a>
-        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '', separar_bairro=filtros.separar_bairro or '') }}" class="btn btn-pdf">Baixar PDF</a>
+        <a href="#" class="btn btn-pdf" id="btnPdfLink" onclick="updatePdfLink()">Baixar PDF</a>
         <a href="{{ url_for('nova_analise_idosos') }}" class="btn btn-outline">Nova Analise</a>
     </div>
 </form>
+<script>
+// Drag and drop para reordenar logradouros
+const list = document.getElementById('logradouroList');
+let dragItem = null;
+if (list) {
+    list.addEventListener('dragstart', (e) => {
+        dragItem = e.target;
+        e.target.style.opacity = '0.4';
+    });
+    list.addEventListener('dragend', (e) => {
+        e.target.style.opacity = '1';
+        dragItem = null;
+        updateHiddenInput();
+    });
+    list.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const target = e.target.closest('.lograd-item');
+        if (target && target !== dragItem && list.contains(target)) {
+            const rect = target.getBoundingClientRect();
+            const mid = rect.left + rect.width / 2;
+            if (e.clientX < mid) {
+                list.insertBefore(dragItem, target);
+            } else {
+                list.insertBefore(dragItem, target.nextSibling);
+            }
+        }
+    });
+}
+function updateHiddenInput() {
+    const items = document.querySelectorAll('.lograd-item');
+    const vals = Array.from(items).map(i => i.dataset.value);
+    const input = document.getElementById('ordem_logradouros_input');
+    if (input) input.value = vals.join('|');
+}
+function updatePdfLink() {
+    updateHiddenInput();
+    const params = new URLSearchParams();
+    const f = document.getElementById('filterForm');
+    if (f) {
+        const inputs = f.querySelectorAll('input, select');
+        inputs.forEach(el => {
+            if (el.name && el.type !== 'hidden') {
+                if (el.type === 'checkbox') {
+                    if (el.checked) params.append(el.name, el.value);
+                } else if (el.value) {
+                    params.append(el.name, el.value);
+                }
+            }
+        });
+    }
+    const ordem = document.getElementById('ordem_logradouros_input');
+    if (ordem && ordem.value) {
+        ordem.value.split('|').forEach(v => { if(v) params.append('ordem_logradouros', v); });
+    }
+    window.location.href = '{{ url_for("download_pdf_idosos") }}?' + params.toString();
+    return false;
+}
+// Inicializar hidden input com ordem atual
+updateHiddenInput();
+</script>
 </div>
 
 <div class="card" style="overflow-x: auto;">
@@ -1550,10 +1626,34 @@ def idosos():
     if filtros["remover_ambos_sim"] == "1":
         pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
 
-    # Garantir campo observacao existe
+    # Garantir campo observacao existe e extrair logradouros unicos
+    logradouros_unicos = []
+    vistos_lograd = set()
     for p in pacientes:
         if "observacao" not in p:
             p["observacao"] = ""
+        lograd = p.get("_logradouro", "") or ""
+        if not lograd:
+            lograd_clean, _ = _extrair_bairro_logradouro(p.get("endereco", ""))
+            p["_logradouro"] = lograd_clean
+            lograd = lograd_clean
+        if lograd and lograd != "-" and lograd not in vistos_lograd:
+            vistos_lograd.add(lograd)
+            logradouros_unicos.append(lograd)
+
+    # Ordenar logradouros pela lista personalizada como referencia inicial
+    logradouros_ordenados = sorted(logradouros_unicos, key=lambda x: _ordem_logradouro_key(x))
+
+    # Se usuario ja selecionou uma ordem via filtro, usar essa ordem
+    ordem_selecionada = request.args.getlist("ordem_logradouros")
+    if ordem_selecionada:
+        # Manter apenas os que existem nos dados, na ordem do usuario
+        logradouros_finais = [l for l in ordem_selecionada if l in vistos_lograd]
+        # Adicionar os que nao foram selecionados no final
+        restantes = [l for l in logradouros_ordenados if l not in ordem_selecionada]
+        logradouros_finais.extend(restantes)
+    else:
+        logradouros_finais = logradouros_ordenados
 
     total = len(_ultimo_resultado_idosos)
     influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
@@ -1567,7 +1667,7 @@ def idosos():
         "ambos_ok": ambos_ok,
     }
 
-    return render_template_string(IDOSOS_TEMPLATE, resultado=pacientes, filtros=filtros, stats=stats, logo_b64=_LOGO_B64)
+    return render_template_string(IDOSOS_TEMPLATE, resultado=pacientes, filtros=filtros, stats=stats, logo_b64=_LOGO_B64, logradouros_disponiveis=logradouros_finais, ordem_selecionada=ordem_selecionada)
 
 
 @app.route("/nova-analise-idosos")
@@ -1594,6 +1694,7 @@ def download_pdf_idosos():
         "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
         "separar_bairro": request.args.get("separar_bairro", ""),
     }
+    ordem_logradouros = request.args.getlist("ordem_logradouros")
 
     pacientes = list(_ultimo_resultado_idosos)
     if filtros["filtro_influenza"]:
@@ -1608,10 +1709,13 @@ def download_pdf_idosos():
     if filtros["remover_ambos_sim"] == "1":
         pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
 
-    # Garantir campo observacao existe
+    # Garantir campo observacao e logradouro existem
     for p in pacientes:
         if "observacao" not in p:
             p["observacao"] = ""
+        if not p.get("_logradouro"):
+            lograd_clean, _ = _extrair_bairro_logradouro(p.get("endereco", ""))
+            p["_logradouro"] = lograd_clean
 
     total = len(_ultimo_resultado_idosos)
     influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
@@ -1624,7 +1728,7 @@ def download_pdf_idosos():
     }
 
     separar = filtros["separar_bairro"] == "1"
-    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat(), separar_por_endereco=separar)
+    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat(), separar_por_endereco=separar, ordem_logradouros=ordem_logradouros)
     try:
         from xhtml2pdf import pisa
         pdf_buffer = io.BytesIO()
