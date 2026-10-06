@@ -828,8 +828,10 @@ def _processar_idosos(vinculados_path, covid_path, influenza_path):
     vinculados = _parse_csv_idosos(vinculados_path)
 
     # 2. Carregar COVID e indexar por CPF (apenas aplicacoes em 2026)
+    #    Tambem extrair mes/ano da ultima aplicacao para cada paciente
     covid_rows = _parse_csv_idosos(covid_path)
     covid_cpfs = set()
+    covid_ultima_data = {}  # {cpf_normalizado: "MM/AAAA"}
     for row in covid_rows:
         data_aplic = row.get("Data da aplicação", "")
         # Verificar se a data contem 2026
@@ -837,6 +839,18 @@ def _processar_idosos(vinculados_path, covid_path, influenza_path):
             cpf = _normalizar_cpf(row.get("CPF", ""))
             if cpf:
                 covid_cpfs.add(cpf)
+                # Extrair mes/ano da data de aplicacao (formatos possiveis: DD/MM/AAAA, AAAA-MM-DD)
+                mes_ano = ""
+                m1 = re.match(r'(\d{1,2})/(\d{1,2})/(\d{4})', data_aplic)
+                if m1:
+                    mes_ano = f"{int(m1.group(2)):02d}/{m1.group(3)}"
+                else:
+                    m2 = re.match(r'(\d{4})-(\d{1,2})-(\d{1,2})', data_aplic)
+                    if m2:
+                        mes_ano = f"{int(m2.group(2)):02d}/{m2.group(1)}"
+                if mes_ano:
+                    # Manter a mais recente (sobrescreve; ordem do CSV geralmente ja e cronologica)
+                    covid_ultima_data[cpf] = mes_ano
 
     # 3. Carregar Influenza e indexar por CPF
     influenza_rows = _parse_csv_idosos(influenza_path)
@@ -874,6 +888,9 @@ def _processar_idosos(vinculados_path, covid_path, influenza_path):
         idade = v.get("Idade", "-")
         micro = v.get("Microárea", "-")
 
+        # Mes/ano da ultima aplicacao COVID (se houver)
+        covid_mes_ano = covid_ultima_data.get(cpf, "")
+
         resultado.append({
             "nome": nome,
             "cpf": cpf,
@@ -883,6 +900,7 @@ def _processar_idosos(vinculados_path, covid_path, influenza_path):
             "micro": micro,
             "influenza": influenza_status,
             "covid": covid_status,
+            "covid_ultima": covid_mes_ano,
         })
 
     # Deduplicar por CPF (manter primeira ocorrencia)
@@ -926,8 +944,15 @@ def _extrair_logradouro(endereco_raw):
     return "-"
 
 
-def _gerar_pdf_idosos_html(pacientes, stats, data_analise):
-    """Gera HTML para PDF do relatorio de idosos, separado por logradouro."""
+def _gerar_pdf_idosos_html(pacientes, stats, data_analise, mostrar_observacao=True):
+    """Gera HTML para PDF do relatorio de idosos, separado por logradouro.
+
+    Args:
+        pacientes: lista de dicts com dados dos pacientes
+        stats: dict com estatisticas
+        data_analise: string da data
+        mostrar_observacao: se True, inclui coluna OBSERVACAO no PDF
+    """
     from collections import OrderedDict
     agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
     logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
@@ -945,6 +970,20 @@ def _gerar_pdf_idosos_html(pacientes, stats, data_analise):
         grupos[chave].append(p)
 
     pacientes_sorted = pacientes
+
+    # Larguras das colunas ajustadas conforme presenca de OBSERVACAO
+    if mostrar_observacao:
+        col_widths = {
+            "nome": "18%", "cpf": "11%", "idade": "8%", "micro": "5%",
+            "endereco": "18%", "influenza": "7%", "covid": "7%",
+            "covid_ultima": "10%", "observacao": "16%",
+        }
+    else:
+        col_widths = {
+            "nome": "22%", "cpf": "12%", "idade": "10%", "micro": "5%",
+            "endereco": "22%", "influenza": "8%", "covid": "8%",
+            "covid_ultima": "13%",
+        }
 
     html = f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -1029,6 +1068,11 @@ table.dados td {{
     color: #475569;
     font-style: italic;
 }}
+.covid-data-cell {{
+    font-size: 8px;
+    color: #1e40af;
+    font-weight: bold;
+}}
 .footer {{
     margin-top: 8px;
     padding-top: 4px;
@@ -1052,17 +1096,18 @@ table.dados td {{
 """
 
     def _render_table_header():
-        return """<table class="dados">
+        obs_col = f'\n    <th style="width: {col_widths["observacao"]};">OBSERVACAO</th>' if mostrar_observacao else ""
+        return f"""<table class="dados">
 <thead>
 <tr>
-    <th style="width: 22%;">NOME</th>
-    <th style="width: 12%;">CPF</th>
-    <th style="width: 10%;">IDADE</th>
-    <th style="width: 5%;">MICRO</th>
-    <th style="width: 22%;">ENDERECO</th>
-    <th style="width: 8%;">INFLUENZA</th>
-    <th style="width: 8%;">COVID</th>
-    <th style="width: 13%;">OBSERVACAO</th>
+    <th style="width: {col_widths['nome']};">NOME</th>
+    <th style="width: {col_widths['cpf']};">CPF</th>
+    <th style="width: {col_widths['idade']};">IDADE</th>
+    <th style="width: {col_widths['micro']};">MICRO</th>
+    <th style="width: {col_widths['endereco']};">ENDERECO</th>
+    <th style="width: {col_widths['influenza']};">INFLUENZA</th>
+    <th style="width: {col_widths['covid']};">COVID</th>
+    <th style="width: {col_widths['covid_ultima']};">ULTIMA COVID</th>{obs_col}
 </tr>
 </thead>
 <tbody>
@@ -1073,7 +1118,8 @@ table.dados td {{
         cov_class = "status-sim" if p["covid"] == "SIM" else "status-nao"
         nome = p["nome"][:40]
         endereco = p["endereco"][:35]
-        obs = p.get("observacao", "")[:30]
+        covid_ultima = p.get("covid_ultima", "")
+        obs_td = f'\n    <td class="obs-cell">{p.get("observacao", "")[:30]}</td>' if mostrar_observacao else ""
         return f"""<tr>
     <td><b>{nome}</b></td>
     <td>{p['cpf_formatado']}</td>
@@ -1082,7 +1128,7 @@ table.dados td {{
     <td>{endereco}</td>
     <td><span class="{inf_class}">{p['influenza']}</span></td>
     <td><span class="{cov_class}">{p['covid']}</span></td>
-    <td class="obs-cell">{obs}</td>
+    <td class="covid-data-cell">{covid_ultima}</td>{obs_td}
 </tr>
 """
 
@@ -1275,13 +1321,17 @@ tr:hover { background: var(--primary-light); }
                     <input type="checkbox" id="remover_ambos_sim" name="remover_ambos_sim" value="1" {{ 'checked' if filtros.remover_ambos_sim == '1' }}>
                     Remover ambos SIM
                 </label>
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+                    <input type="checkbox" id="mostrar_observacao" name="mostrar_observacao" value="1" {{ 'checked' if filtros.get('mostrar_observacao', '1') == '1' }}>
+                    Mostrar coluna Observacao no PDF
+                </label>
                 </div>
         </div>
     </div>
     <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
         <a href="{{ url_for('idosos') }}" class="btn btn-outline">Limpar Filtros</a>
-        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '') }}" class="btn btn-pdf">Baixar PDF</a>
+        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '', mostrar_observacao=filtros.get('mostrar_observacao', '1')) }}" class="btn btn-pdf">Baixar PDF</a>
         <a href="{{ url_for('nova_analise_idosos') }}" class="btn btn-outline">Nova Analise</a>
     </div>
 </form>
@@ -1308,6 +1358,7 @@ tr:hover { background: var(--primary-light); }
     <th style="min-width: 200px;">Endereco</th>
     <th style="min-width: 90px;">Influenza</th>
     <th style="min-width: 90px;">COVID</th>
+    <th style="min-width: 100px;">Última COVID</th>
     <th style="min-width: 120px;">Observacao</th>
 </tr>
 </thead>
@@ -1321,6 +1372,7 @@ tr:hover { background: var(--primary-light); }
     <td>{{ p.endereco }}</td>
     <td><span class="status-badge status-{{ p.influenza|lower }}">{{ p.influenza }}</span></td>
     <td><span class="status-badge status-{{ p.covid|lower }}">{{ p.covid }}</span></td>
+    <td style="font-size:0.8rem;color:#1e40af;font-weight:600;">{{ p.get('covid_ultima', '') }}</td>
     <td style="font-size:0.8rem;color:var(--text-muted);">{{ p.get('observacao', '') }}</td>
 </tr>
 {% endfor %}
@@ -1629,6 +1681,7 @@ def idosos():
         "busca_nome": request.args.get("busca_nome", ""),
         "busca_micro": request.args.get("busca_micro", ""),
         "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
+        "mostrar_observacao": request.args.get("mostrar_observacao", "1"),
         "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
     }
 
@@ -1779,7 +1832,8 @@ def download_pdf_idosos():
         "covid_pendente": covid_pendente,
     }
 
-    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat())
+    mostrar_observacao = request.args.get("mostrar_observacao", "1") == "1"
+    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat(), mostrar_observacao=mostrar_observacao)
     try:
         from xhtml2pdf import pisa
         pdf_buffer = io.BytesIO()
