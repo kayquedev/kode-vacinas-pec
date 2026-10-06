@@ -142,7 +142,7 @@ def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
     """
     total_no_relatorio = sum(len(v) for v in pacientes_agrupados.values())
     agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-    logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="height: 40px; margin-right: 10px;" />' if _LOGO_B64 else ""
+    logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -157,13 +157,13 @@ def _gerar_pdf_html(pacientes_agrupados, stats, data_analise):
 body {{
     font-family: Helvetica, Arial, sans-serif;
     font-size: 9px;
-    color: #1e293b;
+    color: #0f172a;
     line-height: 1.3;
 }}
 .header-table {{
     width: 100%;
     border-collapse: collapse;
-    border-bottom: 2px solid #0e7490;
+    border-bottom: 2px solid #2563eb;
     margin-bottom: 6px;
     -pdf-keep-with-next: true;
 }}
@@ -176,15 +176,12 @@ body {{
 }}
 .header-right {{
     text-align: right;
-    width: 80px;
-}}
-.logo {{
-    height: 40px;
+    width: 130px;
 }}
 .titulo {{
     font-size: 14px;
     font-weight: bold;
-    color: #0e7490;
+    color: #2563eb;
 }}
 .info-line {{
     font-size: 8px;
@@ -192,7 +189,7 @@ body {{
     margin-top: 3px;
 }}
 .grupo-header {{
-    background-color: #0e7490;
+    background-color: #2563eb;
     color: white;
     padding: 3px 8px;
     margin-bottom: 2px;
@@ -208,12 +205,12 @@ table.dados {{
     font-size: 9px;
 }}
 table.dados th {{
-    background-color: #f1f5f9;
+    background-color: #f8fafc;
     padding: 4px 6px;
     text-align: left;
     font-weight: bold;
-    border-bottom: 2px solid #0e7490;
-    color: #0e7490;
+    border-bottom: 2px solid #2563eb;
+    color: #1d4ed8;
     font-size: 8px;
 }}
 table.dados td {{
@@ -221,11 +218,12 @@ table.dados td {{
     border-bottom: 1px solid #e2e8f0;
     vertical-align: top;
     font-size: 9px;
+    color: #0f172a;
 }}
 .imuno-tag {{
     display: inline;
     background-color: #eff6ff;
-    color: #1e40af;
+    color: #1d4ed8;
     padding: 1px 4px;
     font-size: 8px;
     margin-right: 2px;
@@ -233,7 +231,7 @@ table.dados td {{
 .footer {{
     margin-top: 8px;
     padding-top: 4px;
-    border-top: 1px solid #cbd5e1;
+    border-top: 1px solid #94a3b8;
     font-size: 7px;
     color: #64748b;
     text-align: center;
@@ -311,29 +309,38 @@ HOME_TEMPLATE = """
 <title>Kode Vacinas PEC - Inicio</title>
 <style>
 :root {
-    --primary: #0e7490;
-    --primary-dark: #0c5f75;
+    --primary: #2563eb;
+    --primary-dark: #1d4ed8;
+    --primary-light: #eff6ff;
+    --secondary: #4338ca;
+    --secondary-light: #eef2ff;
     --bg: #f8fafc;
     --card-bg: #ffffff;
-    --text: #1e293b;
+    --text: #0f172a;
     --text-muted: #64748b;
+    --text-secondary: #475569;
     --border: #e2e8f0;
+    --success: #059669;
+    --success-light: #d1fae5;
+    --warning: #d97706;
+    --warning-light: #fffbeb;
+    --danger: #dc2626;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .home-container { text-align: center; max-width: 800px; padding: 40px 20px; }
-.logo-img { max-width: 280px; margin-bottom: 20px; }
+.logo-img { max-width: 260px; margin-bottom: 20px; }
 .home-title { font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px; }
 .home-subtitle { font-size: 1rem; color: var(--text-muted); margin-bottom: 40px; }
 .cards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; width: 100%; }
 .access-card { background: var(--card-bg); border-radius: 16px; padding: 40px 30px; text-align: center; cursor: pointer; transition: all 0.3s ease; border: 2px solid var(--border); text-decoration: none; color: var(--text); display: block; }
-.access-card:hover { border-color: var(--primary); transform: translateY(-4px); box-shadow: 0 12px 24px rgba(14, 116, 144, 0.15); }
+.access-card:hover { border-color: var(--primary); transform: translateY(-4px); box-shadow: 0 12px 24px rgba(37, 99, 235, 0.12); }
 .card-icon { font-size: 3rem; margin-bottom: 16px; }
 .card-title { font-size: 1.3rem; font-weight: 600; margin-bottom: 8px; color: var(--primary); }
 .card-desc { font-size: 0.9rem; color: var(--text-muted); line-height: 1.5; }
 .card-badge { display: inline-block; margin-top: 16px; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
-.badge-active { background: #d1fae5; color: #065f46; }
-.badge-soon { background: #fef3c7; color: #92400e; }
+.badge-active { background: var(--success-light); color: #065f46; }
+.badge-soon { background: var(--warning-light); color: #92400e; }
 .footer-home { margin-top: 40px; font-size: 0.8rem; color: var(--text-muted); }
 @media (max-width: 640px) {
     .cards-grid { grid-template-columns: 1fr; }
@@ -380,15 +387,21 @@ VACINAS_TEMPLATE = """
 <title>Kode Vacinas PEC - Analisador de Vacinacao</title>
 <style>
 :root {
-    --primary: #0e7490;
-    --primary-dark: #0c5f75;
+    --primary: #2563eb;
+    --primary-dark: #1d4ed8;
+    --primary-light: #eff6ff;
+    --secondary: #4338ca;
+    --secondary-light: #eef2ff;
     --bg: #f8fafc;
     --card-bg: #ffffff;
-    --text: #1e293b;
+    --text: #0f172a;
     --text-muted: #64748b;
+    --text-secondary: #475569;
     --border: #e2e8f0;
     --success: #059669;
+    --success-light: #d1fae5;
     --warning: #d97706;
+    --warning-light: #fffbeb;
     --danger: #dc2626;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -396,49 +409,49 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
 header { background: var(--primary); color: white; padding: 12px 0; margin-bottom: 24px; }
 header .container { display: flex; align-items: center; gap: 15px; }
-header .logo-sm { height: 36px; background: white; border-radius: 6px; padding: 2px; }
+header .logo-sm { height: 32px; background: white; border-radius: 4px; padding: 2px; }
 header h1 { font-size: 1.3rem; font-weight: 600; }
 header .subtitle { opacity: 0.9; font-size: 0.85rem; }
 header .back-link { margin-left: auto; color: white; text-decoration: none; font-size: 0.85rem; opacity: 0.8; }
 header .back-link:hover { opacity: 1; text-decoration: underline; }
-.card { background: var(--card-bg); border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.card { background: var(--card-bg); border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .card h2 { font-size: 1.2rem; margin-bottom: 16px; color: var(--primary); }
 .upload-area { border: 2px dashed var(--border); border-radius: 8px; padding: 40px; text-align: center; transition: all 0.2s; cursor: pointer; }
-.upload-area:hover, .upload-area.dragover { border-color: var(--primary); background: #f0f9ff; }
+.upload-area:hover, .upload-area.dragover { border-color: var(--primary); background: var(--primary-light); }
 .upload-area input[type="file"] { display: none; }
 .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; font-size: 0.9rem; }
 .btn-primary { background: var(--primary); color: white; }
 .btn-primary:hover { background: var(--primary-dark); }
 .btn-success { background: var(--success); color: white; }
-.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
-.btn-outline:hover { background: var(--bg); }
-.btn-pdf { background: #7c3aed; color: white; }
-.btn-pdf:hover { background: #6d28d9; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+.btn-outline:hover { background: var(--bg); border-color: var(--primary); color: var(--primary); }
+.btn-pdf { background: var(--secondary); color: white; }
+.btn-pdf:hover { background: var(--secondary); opacity: 0.9; }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
-.stat-card { background: var(--bg); border-radius: 8px; padding: 12px; text-align: center; }
+.stat-card { background: var(--bg); border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border); }
 .stat-value { font-size: 1.8rem; font-weight: 700; color: var(--primary); }
 .stat-label { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th { background: var(--bg); padding: 10px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 10; }
-td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-tr:hover { background: #f8fafc; }
-.imuno-tag { display: inline-block; background: #eff6ff; color: #1e40af; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; margin: 2px; white-space: nowrap; }
+th { background: var(--bg); padding: 10px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--primary); position: sticky; top: 0; z-index: 10; color: var(--text); }
+td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-secondary); }
+tr:hover { background: var(--primary-light); }
+.imuno-tag { display: inline-block; background: var(--primary-light); color: var(--primary-dark); padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; margin: 2px; white-space: nowrap; font-weight: 500; }
 .section-title { display: flex; align-items: center; gap: 10px; margin: 20px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--primary); }
 .section-title h3 { font-size: 1.1rem; color: var(--primary); }
 .section-count { background: var(--primary); color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; }
 .alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
 .alert-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
-.alert-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+.alert-success { background: var(--success-light); color: #065f46; border: 1px solid #a7f3d0; }
 .file-list { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
-.file-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg); border-radius: 6px; font-size: 0.85rem; }
+.file-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg); border-radius: 6px; font-size: 0.85rem; border: 1px solid var(--border); }
 .file-icon { color: var(--success); }
 .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
-.filters-panel { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.filters-panel { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid var(--border); }
 .filters-panel h3 { font-size: 1rem; color: var(--primary); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
 .filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
 .filter-group label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; color: var(--text); }
-.filter-group input, .filter-group select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; }
-.filter-group input:focus, .filter-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.1); }
+.filter-group input, .filter-group select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; color: var(--text); background: white; }
+.filter-group input:focus, .filter-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); }
 .filter-actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
 .imunos-remove-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .imuno-remove-chip { display: inline-flex; align-items: center; gap: 4px; background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 16px; font-size: 0.8rem; cursor: pointer; }
@@ -446,7 +459,7 @@ tr:hover { background: #f8fafc; }
 .imuno-remove-chip .x { font-weight: bold; }
 .checkbox-group { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .checkbox-group input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); }
-.checkbox-group label { margin-bottom: 0; cursor: pointer; }
+.checkbox-group label { margin-bottom: 0; cursor: pointer; color: var(--text-secondary); }
 @media (max-width: 768px) {
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .filters-grid { grid-template-columns: 1fr; }
