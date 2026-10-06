@@ -831,8 +831,13 @@ def _extrair_bairro_logradouro(endereco_raw):
         match_local = re.match(r'^(?:Area|Área)\s+([A-Z][A-Z\s]+)', logradouro, re.IGNORECASE)
         if match_local:
             bairro = f"Area {match_local.group(1).strip().upper()}"
-    logradouro_limpo = re.sub(r'\.\s*(CASA|APARTAMENTO|APT|FUNDO|FUNDOS|TERREO)\s*\d*', '.', logradouro, flags=re.IGNORECASE).strip()
-    if logradouro_limpo.endswith("."):
+    # Remover numeros, complementos e tipos de logradouro para agrupamento limpo
+    logradouro_limpo = re.sub(r',?\s*\d+\s*\.?\s*(CASA|APARTAMENTO|APT|FUNDO|FUNDOS|TERREO|S/N|SN)?\s*\d*', '', logradouro, flags=re.IGNORECASE).strip()
+    logradouro_limpo = re.sub(r'\b(CASA|APARTAMENTO|APT|FUNDO|FUNDOS|TERREO|S/N|SN)\b', '', logradouro_limpo, flags=re.IGNORECASE).strip()
+    logradouro_limpo = re.sub(r'\s+', ' ', logradouro_limpo)
+    # Remover prefixos genericos como "Rua", "Avenida" etc para normalizar
+    logradouro_limpo = re.sub(r'^(RUA|AVENIDA|AV|TRAVESSA|TV|ALAMEDA|PRACA|ESTRADA)\s+', '', logradouro_limpo, flags=re.IGNORECASE).strip()
+    if logradouro_limpo.endswith(",") or logradouro_limpo.endswith("."):
         logradouro_limpo = logradouro_limpo[:-1].strip()
     return (logradouro_limpo[:50], bairro[:30])
 
