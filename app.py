@@ -797,10 +797,47 @@ def _processar_idosos(vinculados_path, covid_path, influenza_path):
     return dedup
 
 
-def _gerar_pdf_idosos_html(pacientes, stats, data_analise):
-    """Gera HTML para PDF do relatorio de idosos."""
+def _extrair_bairro_logradouro(endereco_raw):
+    """Extrai bairro e logradouro do campo de endereco do e-SUS PEC."""
+    if not endereco_raw or endereco_raw.strip() == "-":
+        return ("-", "-")
+    partes = endereco_raw.split("|")[0].strip()
+    bairro = "-"
+    logradouro = partes
+    match_bairro = re.search(r'\s-\s([A-Z][A-Z\s]+?),\s', partes)
+    if match_bairro:
+        bairro = match_bairro.group(1).strip()
+        logradouro = partes[:match_bairro.start()].strip()
+    else:
+        if "," in partes:
+            segmentos = partes.split(",")
+            if len(segmentos) >= 2:
+                possivel_bairro = segmentos[-2].strip().split(" - ")[-1].strip()
+                if possivel_bairro and len(possivel_bairro) < 30:
+                    bairro = possivel_bairro
+                logradouro = ",".join(segmentos[:-1]).strip()
+    logradouro_limpo = re.sub(r'\.\s*(CASA|APARTAMENTO|APT|FUNDO|FUNDOS|TERREO)\s*\d*', '.', logradouro, flags=re.IGNORECASE).strip()
+    if logradouro_limpo.endswith("."):
+        logradouro_limpo = logradouro_limpo[:-1].strip()
+    return (logradouro_limpo[:50], bairro[:25])
+
+
+def _gerar_pdf_idosos_html(pacientes, stats, data_analise, separar_por_endereco=False):
+    """Gera HTML para PDF do relatorio de idosos.
+    Se separar_por_endereco=True, agrupa por bairro com subtitulos."""
+    from collections import OrderedDict
     agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
     logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
+
+    for p in pacientes:
+        lograd, bairro = _extrair_bairro_logradouro(p.get("endereco", ""))
+        p["_bairro"] = bairro
+        p["_logradouro"] = lograd
+
+    if separar_por_endereco:
+        pacientes_sorted = sorted(pacientes, key=lambda x: (x["_bairro"], x["_logradouro"], x["nome"]))
+    else:
+        pacientes_sorted = pacientes
 
     html = f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -833,6 +870,15 @@ body {{
 .header-right {{ text-align: right; width: 130px; }}
 .titulo {{ font-size: 14px; font-weight: bold; color: #1e40af; }}
 .info-line {{ font-size: 8px; color: #475569; margin-top: 3px; }}
+.section-title {{
+    background-color: #1e40af;
+    color: white;
+    padding: 4px 8px;
+    font-size: 9px;
+    font-weight: bold;
+    margin: 8px 0 4px 0;
+    -pdf-keep-with-next: true;
+}}
 table.dados {{
     width: 100%;
     border-collapse: collapse;
@@ -871,6 +917,11 @@ table.dados td {{
     font-size: 8px;
     font-weight: bold;
 }}
+.obs-cell {{
+    font-size: 8px;
+    color: #475569;
+    font-style: italic;
+}}
 .footer {{
     margin-top: 8px;
     padding-top: 4px;
@@ -891,39 +942,63 @@ table.dados td {{
 <td class="header-right">{logo_img}</td>
 </tr>
 </table>
-<table class="dados">
+"""
+
+    def _render_table_header():
+        return """<table class="dados">
 <thead>
 <tr>
-    <th style="width: 25%;">NOME</th>
-    <th style="width: 14%;">CPF</th>
-    <th style="width: 12%;">IDADE</th>
-    <th style="width: 6%;">MICRO</th>
-    <th style="width: 25%;">ENDERECO</th>
-    <th style="width: 9%;">INFLUENZA</th>
-    <th style="width: 9%;">COVID</th>
+    <th style="width: 22%;">NOME</th>
+    <th style="width: 12%;">CPF</th>
+    <th style="width: 10%;">IDADE</th>
+    <th style="width: 5%;">MICRO</th>
+    <th style="width: 22%;">ENDERECO</th>
+    <th style="width: 8%;">INFLUENZA</th>
+    <th style="width: 8%;">COVID</th>
+    <th style="width: 13%;">OBSERVACAO</th>
 </tr>
 </thead>
 <tbody>
 """
-    for p in pacientes:
+
+    def _render_row(p):
         inf_class = "status-sim" if p["influenza"] == "SIM" else "status-nao"
         cov_class = "status-sim" if p["covid"] == "SIM" else "status-nao"
-        nome = p["nome"][:45]
-        endereco = p["endereco"][:40]
-        html += f"""
-<tr>
+        nome = p["nome"][:40]
+        endereco = p["endereco"][:35]
+        obs = p.get("observacao", "")[:30]
+        return f"""<tr>
     <td><b>{nome}</b></td>
     <td>{p['cpf_formatado']}</td>
-    <td>{p['idade'][:20]}</td>
+    <td>{p['idade'][:18]}</td>
     <td>{p['micro']}</td>
     <td>{endereco}</td>
     <td><span class="{inf_class}">{p['influenza']}</span></td>
     <td><span class="{cov_class}">{p['covid']}</span></td>
+    <td class="obs-cell">{obs}</td>
 </tr>
 """
+
+    if separar_por_endereco:
+        grupos = OrderedDict()
+        for p in pacientes_sorted:
+            chave = p["_bairro"] if p["_bairro"] != "-" else "Sem bairro identificado"
+            if chave not in grupos:
+                grupos[chave] = []
+            grupos[chave].append(p)
+        for bairro_nome, grupo_pacientes in grupos.items():
+            html += f'<div class="section-title">{bairro_nome} ({len(grupo_pacientes)} idosos)</div>\n'
+            html += _render_table_header()
+            for p in grupo_pacientes:
+                html += _render_row(p)
+            html += "</tbody>\n</table>\n"
+    else:
+        html += _render_table_header()
+        for p in pacientes_sorted:
+            html += _render_row(p)
+        html += "</tbody>\n</table>\n"
+
     html += f"""
-</tbody>
-</table>
 <div class="footer">
     Vacinacao Idosos 60+ - KODE VACINAS PEC - Sistema de Apoio a Gestao Municipal<br/>
     Documento gerado automaticamente em {agora}
@@ -1096,10 +1171,22 @@ tr:hover { background: var(--primary-light); }
             <input type="text" id="busca_micro" name="busca_micro" value="{{ filtros.busca_micro or '' }}" placeholder="Ex: 06">
         </div>
     </div>
+    <div class="filter-group">
+            <label for="remover_ambos_sim">Opcoes PDF</label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:4px;cursor:pointer;">
+                <input type="checkbox" id="remover_ambos_sim" name="remover_ambos_sim" value="1" {{ 'checked' if filtros.remover_ambos_sim == '1' }}>
+                Remover ambos SIM
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:4px;cursor:pointer;">
+                <input type="checkbox" id="separar_bairro" name="separar_bairro" value="1" {{ 'checked' if filtros.separar_bairro == '1' }}>
+                Separar por bairro
+            </label>
+        </div>
+    </div>
     <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
         <a href="{{ url_for('idosos') }}" class="btn btn-outline">Limpar Filtros</a>
-        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '') }}" class="btn btn-pdf">Baixar PDF</a>
+        <a href="{{ url_for('download_pdf_idosos', filtro_influenza=filtros.filtro_influenza or '', filtro_covid=filtros.filtro_covid or '', busca_nome=filtros.busca_nome or '', busca_micro=filtros.busca_micro or '', remover_ambos_sim=filtros.remover_ambos_sim or '', separar_bairro=filtros.separar_bairro or '') }}" class="btn btn-pdf">Baixar PDF</a>
         <a href="{{ url_for('nova_analise_idosos') }}" class="btn btn-outline">Nova Analise</a>
     </div>
 </form>
@@ -1116,6 +1203,7 @@ tr:hover { background: var(--primary-light); }
     <th style="min-width: 200px;">Endereco</th>
     <th style="min-width: 90px;">Influenza</th>
     <th style="min-width: 90px;">COVID</th>
+    <th style="min-width: 120px;">Observacao</th>
 </tr>
 </thead>
 <tbody>
@@ -1128,6 +1216,7 @@ tr:hover { background: var(--primary-light); }
     <td>{{ p.endereco }}</td>
     <td><span class="status-badge status-{{ p.influenza|lower }}">{{ p.influenza }}</span></td>
     <td><span class="status-badge status-{{ p.covid|lower }}">{{ p.covid }}</span></td>
+    <td style="font-size:0.8rem;color:var(--text-muted);">{{ p.get('observacao', '') }}</td>
 </tr>
 {% endfor %}
 </tbody>
@@ -1357,6 +1446,8 @@ def idosos():
         "filtro_covid": request.args.get("filtro_covid", ""),
         "busca_nome": request.args.get("busca_nome", ""),
         "busca_micro": request.args.get("busca_micro", ""),
+        "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
+        "separar_bairro": request.args.get("separar_bairro", ""),
     }
 
     if request.method == "POST":
@@ -1405,6 +1496,13 @@ def idosos():
         pacientes = [p for p in pacientes if termo in p["nome"].lower()]
     if filtros["busca_micro"]:
         pacientes = [p for p in pacientes if filtros["busca_micro"] in p["micro"]]
+    if filtros["remover_ambos_sim"] == "1":
+        pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
+
+    # Garantir campo observacao existe
+    for p in pacientes:
+        if "observacao" not in p:
+            p["observacao"] = ""
 
     total = len(_ultimo_resultado_idosos)
     influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
@@ -1442,9 +1540,11 @@ def download_pdf_idosos():
         "filtro_covid": request.args.get("filtro_covid", ""),
         "busca_nome": request.args.get("busca_nome", ""),
         "busca_micro": request.args.get("busca_micro", ""),
+        "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
+        "separar_bairro": request.args.get("separar_bairro", ""),
     }
 
-    pacientes = _ultimo_resultado_idosos
+    pacientes = list(_ultimo_resultado_idosos)
     if filtros["filtro_influenza"]:
         pacientes = [p for p in pacientes if p["influenza"] == filtros["filtro_influenza"]]
     if filtros["filtro_covid"]:
@@ -1454,6 +1554,13 @@ def download_pdf_idosos():
         pacientes = [p for p in pacientes if termo in p["nome"].lower()]
     if filtros["busca_micro"]:
         pacientes = [p for p in pacientes if filtros["busca_micro"] in p["micro"]]
+    if filtros["remover_ambos_sim"] == "1":
+        pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
+
+    # Garantir campo observacao existe
+    for p in pacientes:
+        if "observacao" not in p:
+            p["observacao"] = ""
 
     total = len(_ultimo_resultado_idosos)
     influenza_pendente = sum(1 for p in _ultimo_resultado_idosos if p["influenza"] == "NAO")
@@ -1465,7 +1572,8 @@ def download_pdf_idosos():
         "covid_pendente": covid_pendente,
     }
 
-    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat())
+    separar = filtros["separar_bairro"] == "1"
+    pdf_html = _gerar_pdf_idosos_html(pacientes, stats, date.today().isoformat(), separar_por_endereco=separar)
     try:
         from xhtml2pdf import pisa
         pdf_buffer = io.BytesIO()
