@@ -797,10 +797,52 @@ def _processar_idosos(vinculados_path, covid_path, influenza_path):
     return dedup
 
 
+def _extrair_logradouro(endereco_raw):
+    """Extrai apenas o nome do logradouro do endereco do e-SUS PEC, ignorando o tipo.
+    Exemplos:
+      'Praca JK, 42. APARTAMENTO 305 - CENTRO, ...' => 'JK'
+      '3ª rua LAGOINHA, 14. PRIMEIRA CASA ESQUINA - ZONA RURAL, ...' => 'LAGOINHA'
+      'AREA CURRAL, S/N. CASA - ZONA RURAL, ...' => 'CURRAL'
+    Os logradouros no CSV estao sempre em UPPERCASE."""
+    if not endereco_raw or endereco_raw.strip() == "-":
+        return "-"
+    # Pegar apenas a parte antes do pipe (CEP)
+    partes = endereco_raw.split("|")[0].strip()
+    # Remover tipos de logradouro no inicio (com ou sem numero ordinal)
+    # Padroes: "RUA ", "AVENIDA ", "PRACA ", "AREA ", "3ª RUA ", "1ª RUA ", etc.
+    logradouro = re.sub(
+        r'^(\d+ª?\s+)?(RUA|AVENIDA|AV|TRAVESSA|TV|ALAMEDA|PRACA|ESTRADA|AREA|ÁREA|RODOVIA|BR)\s+',
+        '', partes, flags=re.IGNORECASE
+    ).strip()
+    # O nome do logradouro e a primeira palavra/frase antes de virgula ou ponto
+    # Ex: "JK, 42." => "JK" | "LAGOINHA, 14." => "LAGOINHA" | "CURRAL, S/N." => "CURRAL"
+    match = re.match(r'^([^,.]+)', logradouro)
+    if match:
+        resultado = match.group(1).strip()
+        # Remover artigos/preposicoes iniciais se sobrarem
+        resultado = re.sub(r'^(DA|DO|DE|DAS|DOS)\s+', '', resultado, flags=re.IGNORECASE).strip()
+        return resultado.upper() if resultado else "-"
+    return "-"
+
+
 def _gerar_pdf_idosos_html(pacientes, stats, data_analise):
-    """Gera HTML para PDF do relatorio de idosos (tabela unica sem agrupamentos)."""
+    """Gera HTML para PDF do relatorio de idosos, separado por logradouro."""
+    from collections import OrderedDict
     agora = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
     logo_img = f'<img src="data:image/png;base64,{_LOGO_B64}" style="width: 120px; height: auto;" />' if _LOGO_B64 else ""
+
+    # Extrair logradouro de cada paciente e agrupar
+    for p in pacientes:
+        p["_logradouro"] = _extrair_logradouro(p.get("endereco", ""))
+
+    # Agrupar por logradouro mantendo ordem de aparecimento
+    grupos = OrderedDict()
+    for p in pacientes:
+        chave = p["_logradouro"]
+        if chave not in grupos:
+            grupos[chave] = []
+        grupos[chave].append(p)
+
     pacientes_sorted = pacientes
 
     html = f"""<!DOCTYPE html>
@@ -943,10 +985,15 @@ table.dados td {{
 </tr>
 """
 
-    html += _render_table_header()
-    for p in pacientes_sorted:
-        html += _render_row(p)
-    html += "</tbody>\n</table>\n"
+    for lograd_nome, grupo_pacientes in grupos.items():
+        inf_pend = sum(1 for p in grupo_pacientes if p["influenza"] == "NAO")
+        cov_pend = sum(1 for p in grupo_pacientes if p["covid"] == "NAO")
+        titulo_secao = f"{lograd_nome} ({len(grupo_pacientes)} idosos - {inf_pend} INFLUENZA pendentes - {cov_pend} COVID pendente)"
+        html += f'<div class="section-title">{titulo_secao}</div>\n'
+        html += _render_table_header()
+        for p in grupo_pacientes:
+            html += _render_row(p)
+        html += "</tbody>\n</table>\n"
 
     html += f"""
 <div class="footer">
