@@ -551,6 +551,7 @@ tr:hover { background: var(--primary-light); }
             {% endfor %}
         </div>
         <input type="hidden" name="imunos_remover" id="imunos_remover_input" value="{{ ','.join(filtros.imunos_remover) }}">
+        <input type="hidden" name="imunos_por_paciente" id="imunos_por_paciente_input" value="{{ filtros.imunos_por_paciente | join('|') if filtros.imunos_por_paciente else '' }}">
     </div>
     <!-- Opcao de separar por logradouro/bairro no PDF -->
     <div class="filter-group" style="margin-top: 16px;">
@@ -705,22 +706,24 @@ function renderExcluidos() {
     input.value = Array.from(cpfsExcluidos).join(',');
 }
 
-// Hover em imuno-tag para excluir cidadao ou imuno especifico
+// Remocao de imuno por paciente especifico (CPF:IMUNO)
+let imunosPorPaciente = new Set((document.getElementById('imunos_por_paciente_input')?.value || '').split('|').filter(Boolean));
+function renderImunosPorPaciente() {
+    const input = document.getElementById('imunos_por_paciente_input');
+    if (input) input.value = Array.from(imunosPorPaciente).join('|');
+}
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.imuno-tag').forEach(tag => {
         tag.style.cursor = 'pointer';
-        tag.title = 'Clique para remover este imuno deste cidadao';
+        tag.title = 'Clique para remover este imuno SOMENTE deste cidadao';
         tag.addEventListener('click', function() {
             const row = this.closest('tr');
-            const cpf = row ? row.cells[1].textContent.trim() : '';
+            const cpf = row ? row.dataset.cpf || row.cells[1].textContent.trim() : '';
             const imuno = this.textContent.trim();
-            if (confirm('Remover imuno "' + imuno + '" do cidadao ' + cpf + '?')) {
-                // Adicionar ao filtro de imunos a remover (global)
-                if (!imunosRemover.has(imuno)) {
-                    imunosRemover.add(imuno);
-                    renderImunosRemover();
-                }
-                // Visualmente remover a tag
+            if (cpf && confirm('Remover imuno "' + imuno + '" APENAS do cidadao ' + cpf + '?')) {
+                const chave = cpf + ':' + imuno;
+                imunosPorPaciente.add(chave);
+                renderImunosPorPaciente();
                 this.remove();
             }
         });
@@ -758,6 +761,8 @@ function buildPdfLinkVacinas() {
     // Incluir hidden inputs
     const imunosInput = document.getElementById('imunos_remover_input');
     if (imunosInput && imunosInput.value) params.set('imunos_remover', imunosInput.value);
+    const imunosPorPacienteInput = document.getElementById('imunos_por_paciente_input');
+    if (imunosPorPacienteInput && imunosPorPacienteInput.value) params.set('imunos_por_paciente', imunosPorPacienteInput.value);
     const excluidosInput = document.getElementById('excluir_cpfs_input');
     if (excluidosInput && excluidosInput.value) params.set('excluir_cpfs', excluidosInput.value);
     window.location.href = '{{ url_for("download_pdf") }}?' + params.toString();
@@ -1417,16 +1422,33 @@ def vacinas():
         "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
         "separar_endereco": request.args.get("separar_endereco") == "1",
         "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
+        "imunos_por_paciente": [x.strip() for x in request.args.get("imunos_por_paciente", "").split("|") if x.strip()],
     }
     if not _ultimo_resultado:
         return render_template_string(VACINAS_TEMPLATE, resultado=None, filtros=filtros, stats={}, todos_imunos=[], logo_b64=_LOGO_B64)
+
+    # Construir mapa de exclusoes por paciente especifico: {cpf: set(imunos)}
+    exclusoes_por_paciente = {}
+    for entrada in filtros["imunos_por_paciente"]:
+        if ":" in entrada:
+            cpf_parte, imuno_parte = entrada.split(":", 1)
+            cpf_norm = re.sub(r'[^\d]', '', cpf_parte.strip())
+            if cpf_norm:
+                if cpf_norm not in exclusoes_por_paciente:
+                    exclusoes_por_paciente[cpf_norm] = set()
+                exclusoes_por_paciente[cpf_norm].add(imuno_parte.strip())
 
     pacientes_unificados = []
     todos_imunos_set = set()
     for grupo_key in ("criancas", "adolescentes"):
         for p in _ultimo_resultado.get(grupo_key, []):
             p_copia = dict(p)
-            p_copia["imunos_pendentes"] = _unificar_imunos(p.get("imunos_pendentes", []))
+            imunos_originais = _unificar_imunos(p.get("imunos_pendentes", []))
+            # Remover imunos excluidos especificamente para este paciente
+            cpf_paciente = re.sub(r'[^\d]', '', p_copia.get("identificador", ""))
+            if cpf_paciente and cpf_paciente in exclusoes_por_paciente:
+                imunos_originais = [i for i in imunos_originais if i not in exclusoes_por_paciente[cpf_paciente]]
+            p_copia["imunos_pendentes"] = imunos_originais
             pacientes_unificados.append(p_copia)
             for imuno in p_copia["imunos_pendentes"]:
                 match = re.match(r'^([^(]+?)(?:\s*\(|$)', imuno.strip())
@@ -1528,12 +1550,28 @@ def download_pdf():
         "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
         "separar_endereco": request.args.get("separar_endereco") == "1",
         "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
+        "imunos_por_paciente": [x.strip() for x in request.args.get("imunos_por_paciente", "").split("|") if x.strip()],
     }
+    # Construir mapa de exclusoes por paciente especifico: {cpf: set(imunos)}
+    exclusoes_por_paciente = {}
+    for entrada in filtros["imunos_por_paciente"]:
+        if ":" in entrada:
+            cpf_parte, imuno_parte = entrada.split(":", 1)
+            cpf_norm = re.sub(r'[^\d]', '', cpf_parte.strip())
+            if cpf_norm:
+                if cpf_norm not in exclusoes_por_paciente:
+                    exclusoes_por_paciente[cpf_norm] = set()
+                exclusoes_por_paciente[cpf_norm].add(imuno_parte.strip())
     pacientes_unificados = []
     for grupo_key in ("criancas", "adolescentes"):
         for p in _ultimo_resultado.get(grupo_key, []):
             p_copia = dict(p)
-            p_copia["imunos_pendentes"] = _unificar_imunos(p.get("imunos_pendentes", []))
+            imunos_originais = _unificar_imunos(p.get("imunos_pendentes", []))
+            # Remover imunos excluidos especificamente para este paciente
+            cpf_paciente = re.sub(r'[^\d]', '', p_copia.get("identificador", ""))
+            if cpf_paciente and cpf_paciente in exclusoes_por_paciente:
+                imunos_originais = [i for i in imunos_originais if i not in exclusoes_por_paciente[cpf_paciente]]
+            p_copia["imunos_pendentes"] = imunos_originais
             pacientes_unificados.append(p_copia)
     pacientes_filtrados = _aplicar_filtros(pacientes_unificados, filtros)
     # Excluir cidadaos manualmente
@@ -1688,6 +1726,7 @@ def download_pdf_idosos():
         "busca_micro": request.args.get("busca_micro", ""),
         "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
         "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
+        "imunos_por_paciente": [x.strip() for x in request.args.get("imunos_por_paciente", "").split("|") if x.strip()],
     }
 
     pacientes = list(_ultimo_resultado_idosos)
@@ -1704,8 +1743,26 @@ def download_pdf_idosos():
         pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
     if filtros["excluir_cpfs"]:
         pacientes = [p for p in pacientes if p.get("cpf_formatado", "") not in filtros["excluir_cpfs"]]
-    if filtros["remover_ambos_sim"] == "1":
-        pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
+
+    # Aplicar exclusoes de imunos por paciente especifico (CPF:VACINA)
+    exclusoes_por_paciente = {}
+    for entrada in filtros["imunos_por_paciente"]:
+        if ":" in entrada:
+            cpf_parte, vacina_parte = entrada.split(":", 1)
+            cpf_norm = re.sub(r'[^\d]', '', cpf_parte.strip())
+            if cpf_norm:
+                if cpf_norm not in exclusoes_por_paciente:
+                    exclusoes_por_paciente[cpf_norm] = set()
+                exclusoes_por_paciente[cpf_norm].add(vacina_parte.strip())
+    if exclusoes_por_paciente:
+        for p in pacientes:
+            cpf_p = re.sub(r'[^\d]', '', p.get("cpf", "") or p.get("cpf_formatado", ""))
+            if cpf_p and cpf_p in exclusoes_por_paciente:
+                vacinas_excluidas = exclusoes_por_paciente[cpf_p]
+                if "influenza" in vacinas_excluidas or "INFLUENZA" in vacinas_excluidas:
+                    p["influenza"] = "-"
+                if "covid" in vacinas_excluidas or "COVID" in vacinas_excluidas:
+                    p["covid"] = "-"
 
     # Garantir campo observacao existe
     for p in pacientes:
