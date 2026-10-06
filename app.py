@@ -559,11 +559,21 @@ tr:hover { background: var(--primary-light); }
             <label for="separar_endereco">Separar por Logradouro/Bairro no PDF</label>
         </div>
     </div>
+    <!-- Excluir cidadaos manualmente -->
+    <div class="filter-group" style="margin-top: 16px;">
+        <label>Cidadaos Excluidos (nao aparecerao no PDF)</label>
+        <div id="excluidosList" class="imunos-remove-list">
+            {% for cpf in filtros.excluir_cpfs %}
+            <span class="imuno-remove-chip" onclick="removerExcluido('{{ cpf }}')">{{ cpf }} <span class="x">&times;</span></span>
+            {% endfor %}
+        </div>
+        <input type="hidden" name="excluir_cpfs" id="excluir_cpfs_input" value="{{ ','.join(filtros.excluir_cpfs) }}">
+    </div>
     <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Aplicar Filtros</button>
         <a href="{{ url_for('vacinas') }}" class="btn btn-outline">Limpar Filtros</a>
         <a href="{{ url_for('download_csv') }}" class="btn btn-success">Baixar CSV</a>
-        <a href="{{ url_for('download_pdf', idade_min=filtros.idade_min or '', idade_max=filtros.idade_max or '', endereco=filtros.endereco, imuno=filtros.imuno, imunos_remover=','.join(filtros.imunos_remover), separar_endereco='1' if filtros.separar_endereco else '') }}" class="btn btn-pdf">Baixar PDF</a>
+        <a href="#" class="btn btn-pdf" onclick="buildPdfLinkVacinas(); return false;">Baixar PDF</a>
         <a href="{{ url_for('nova_analise') }}" class="btn btn-outline">Nova Analise</a>
     </div>
 </form>
@@ -590,8 +600,8 @@ tr:hover { background: var(--primary-light); }
 </thead>
 <tbody>
 {% for p in lista %}
-<tr>
-    <td><strong>{{ p.nome }}</strong></td>
+<tr data-cpf="{{ p.identificador }}">
+    <td><strong>{{ p.nome }}</strong> <button type="button" class="btn-excluir-cidadao" data-cpf="{{ p.identificador }}" data-nome="{{ p.nome }}" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:0.8rem;margin-left:4px;" title="Excluir cidadao">&#10005;</button></td>
     <td>{{ p.identificador }}</td>
     <td>{{ p.idade_texto }}</td>
     <td>{{ p.data_nascimento or "-" }}</td>
@@ -640,6 +650,8 @@ function updateFileList() {
     });
 }
 let imunosRemover = new Set({{ filtros.imunos_remover | tojson }});
+let cpfsExcluidos = new Set((document.getElementById('excluir_cpfs_input').value || '').split(',').filter(Boolean));
+
 function addImunoRemover() {
     const select = document.getElementById('imuno_select');
     const valor = select.value;
@@ -665,6 +677,90 @@ function renderImunosRemover() {
         container.appendChild(chip);
     });
     input.value = Array.from(imunosRemover).join(',');
+}
+
+// Exclusao manual de cidadaos
+function excluirCidadao(cpf) {
+    if (cpf && !cpfsExcluidos.has(cpf)) {
+        cpfsExcluidos.add(cpf);
+        renderExcluidos();
+    }
+}
+function removerExcluido(cpf) {
+    cpfsExcluidos.delete(cpf);
+    renderExcluidos();
+}
+function renderExcluidos() {
+    const container = document.getElementById('excluidosList');
+    const input = document.getElementById('excluir_cpfs_input');
+    if (!container || !input) return;
+    container.innerHTML = '';
+    cpfsExcluidos.forEach(cpf => {
+        const chip = document.createElement('span');
+        chip.className = 'imuno-remove-chip';
+        chip.onclick = function() { removerExcluido(cpf); };
+        chip.innerHTML = cpf + ' <span class="x">&times;</span>';
+        container.appendChild(chip);
+    });
+    input.value = Array.from(cpfsExcluidos).join(',');
+}
+
+// Hover em imuno-tag para excluir cidadao ou imuno especifico
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.imuno-tag').forEach(tag => {
+        tag.style.cursor = 'pointer';
+        tag.title = 'Clique para remover este imuno deste cidadao';
+        tag.addEventListener('click', function() {
+            const row = this.closest('tr');
+            const cpf = row ? row.cells[1].textContent.trim() : '';
+            const imuno = this.textContent.trim();
+            if (confirm('Remover imuno "' + imuno + '" do cidadao ' + cpf + '?')) {
+                // Adicionar ao filtro de imunos a remover (global)
+                if (!imunosRemover.has(imuno)) {
+                    imunosRemover.add(imuno);
+                    renderImunosRemover();
+                }
+                // Visualmente remover a tag
+                this.remove();
+            }
+        });
+    });
+    // Botao de excluir cidadao na tabela
+    document.querySelectorAll('.btn-excluir-cidadao').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const cpf = this.dataset.cpf;
+            const nome = this.dataset.nome || cpf;
+            if (confirm('Excluir cidadao ' + nome + ' (' + cpf + ') do PDF?')) {
+                excluirCidadao(cpf);
+                // Ocultar linha visualmente
+                const row = this.closest('tr');
+                if (row) row.style.opacity = '0.3';
+            }
+        });
+    });
+});
+
+function buildPdfLinkVacinas() {
+    const params = new URLSearchParams();
+    const f = document.getElementById('filterForm');
+    if (f) {
+        const inputs = f.querySelectorAll('input, select');
+        inputs.forEach(el => {
+            if (el.name && el.type !== 'hidden') {
+                if (el.type === 'checkbox') {
+                    if (el.checked) params.append(el.name, el.value);
+                } else if (el.value) {
+                    params.append(el.name, el.value);
+                }
+            }
+        });
+    }
+    // Incluir hidden inputs
+    const imunosInput = document.getElementById('imunos_remover_input');
+    if (imunosInput && imunosInput.value) params.set('imunos_remover', imunosInput.value);
+    const excluidosInput = document.getElementById('excluir_cpfs_input');
+    if (excluidosInput && excluidosInput.value) params.set('excluir_cpfs', excluidosInput.value);
+    window.location.href = '{{ url_for("download_pdf") }}?' + params.toString();
 }
 </script>
 </body>
@@ -1184,6 +1280,16 @@ tr:hover { background: var(--primary-light); }
         <a href="{{ url_for('nova_analise_idosos') }}" class="btn btn-outline">Nova Analise</a>
     </div>
 </form>
+<!-- Excluir cidadaos manualmente -->
+<div class="filter-group" style="margin-top: 16px;">
+    <label>Cidadaos Excluidos (nao aparecerao no PDF)</label>
+    <div id="excluidosListIdosos" class="imunos-remove-list">
+        {% for cpf in filtros.excluir_cpfs %}
+        <span class="imuno-remove-chip" onclick="removerExcluidoIdosos('{{ cpf }}')">{{ cpf }} <span class="x">&times;</span></span>
+        {% endfor %}
+    </div>
+    <input type="hidden" name="excluir_cpfs" id="excluir_cpfs_input_idosos" value="{{ ','.join(filtros.excluir_cpfs) }}">
+</div>
 </div>
 
 <div class="card" style="overflow-x: auto;">
@@ -1202,8 +1308,8 @@ tr:hover { background: var(--primary-light); }
 </thead>
 <tbody>
 {% for p in resultado %}
-<tr>
-    <td><strong>{{ p.nome }}</strong></td>
+<tr data-cpf="{{ p.cpf_formatado }}">
+    <td><strong>{{ p.nome }}</strong> <button type="button" class="btn-excluir-cidadao-idoso" data-cpf="{{ p.cpf_formatado }}" data-nome="{{ p.nome }}" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:0.8rem;margin-left:4px;" title="Excluir cidadao">&#10005;</button></td>
     <td>{{ p.cpf_formatado }}</td>
     <td>{{ p.idade }}</td>
     <td>{{ p.micro }}</td>
@@ -1245,6 +1351,45 @@ function updateFileList() {
         fileList.appendChild(div);
     });
 }
+// Exclusao manual de cidadaos - Idosos
+let cpfsExcluidosIdosos = new Set((document.getElementById('excluir_cpfs_input_idosos').value || '').split(',').filter(Boolean));
+function excluirCidadaoIdosos(cpf) {
+    if (cpf && !cpfsExcluidosIdosos.has(cpf)) {
+        cpfsExcluidosIdosos.add(cpf);
+        renderExcluidosIdosos();
+    }
+}
+function removerExcluidoIdosos(cpf) {
+    cpfsExcluidosIdosos.delete(cpf);
+    renderExcluidosIdosos();
+}
+function renderExcluidosIdosos() {
+    const container = document.getElementById('excluidosListIdosos');
+    const input = document.getElementById('excluir_cpfs_input_idosos');
+    if (!container || !input) return;
+    container.innerHTML = '';
+    cpfsExcluidosIdosos.forEach(cpf => {
+        const chip = document.createElement('span');
+        chip.className = 'imuno-remove-chip';
+        chip.onclick = function() { removerExcluidoIdosos(cpf); };
+        chip.innerHTML = cpf + ' <span class="x">&times;</span>';
+        container.appendChild(chip);
+    });
+    input.value = Array.from(cpfsExcluidosIdosos).join(',');
+}
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.btn-excluir-cidadao-idoso').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const cpf = this.dataset.cpf;
+            const nome = this.dataset.nome || cpf;
+            if (confirm('Excluir cidadao ' + nome + ' (' + cpf + ') do PDF?')) {
+                excluirCidadaoIdosos(cpf);
+                const row = this.closest('tr');
+                if (row) row.style.opacity = '0.3';
+            }
+        });
+    });
+});
 </script>
 </body>
 </html>
@@ -1271,6 +1416,7 @@ def vacinas():
         "imuno": request.args.get("imuno", ""),
         "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
         "separar_endereco": request.args.get("separar_endereco") == "1",
+        "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
     }
     if not _ultimo_resultado:
         return render_template_string(VACINAS_TEMPLATE, resultado=None, filtros=filtros, stats={}, todos_imunos=[], logo_b64=_LOGO_B64)
@@ -1381,6 +1527,7 @@ def download_pdf():
         "imuno": request.args.get("imuno", ""),
         "imunos_remover": [i.strip() for i in request.args.get("imunos_remover", "").split(",") if i.strip()],
         "separar_endereco": request.args.get("separar_endereco") == "1",
+        "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
     }
     pacientes_unificados = []
     for grupo_key in ("criancas", "adolescentes"):
@@ -1389,6 +1536,9 @@ def download_pdf():
             p_copia["imunos_pendentes"] = _unificar_imunos(p.get("imunos_pendentes", []))
             pacientes_unificados.append(p_copia)
     pacientes_filtrados = _aplicar_filtros(pacientes_unificados, filtros)
+    # Excluir cidadaos manualmente
+    if filtros["excluir_cpfs"]:
+        pacientes_filtrados = [p for p in pacientes_filtrados if p.get("identificador", "") not in filtros["excluir_cpfs"]]
     stats = {
         "total_pacientes": len(pacientes_filtrados),
         "total_criancas": sum(1 for p in pacientes_filtrados if p.get("grupo_etario") == "Crianca"),
@@ -1441,6 +1591,7 @@ def idosos():
         "busca_nome": request.args.get("busca_nome", ""),
         "busca_micro": request.args.get("busca_micro", ""),
         "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
+        "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
     }
 
     if request.method == "POST":
@@ -1491,6 +1642,8 @@ def idosos():
         pacientes = [p for p in pacientes if filtros["busca_micro"] in p["micro"]]
     if filtros["remover_ambos_sim"] == "1":
         pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
+    if filtros["excluir_cpfs"]:
+        pacientes = [p for p in pacientes if p.get("cpf_formatado", "") not in filtros["excluir_cpfs"]]
 
     # Garantir campo observacao existe
     for p in pacientes:
@@ -1534,6 +1687,7 @@ def download_pdf_idosos():
         "busca_nome": request.args.get("busca_nome", ""),
         "busca_micro": request.args.get("busca_micro", ""),
         "remover_ambos_sim": request.args.get("remover_ambos_sim", ""),
+        "excluir_cpfs": [c.strip() for c in request.args.get("excluir_cpfs", "").split(",") if c.strip()],
     }
 
     pacientes = list(_ultimo_resultado_idosos)
@@ -1546,6 +1700,10 @@ def download_pdf_idosos():
         pacientes = [p for p in pacientes if termo in p["nome"].lower()]
     if filtros["busca_micro"]:
         pacientes = [p for p in pacientes if filtros["busca_micro"] in p["micro"]]
+    if filtros["remover_ambos_sim"] == "1":
+        pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
+    if filtros["excluir_cpfs"]:
+        pacientes = [p for p in pacientes if p.get("cpf_formatado", "") not in filtros["excluir_cpfs"]]
     if filtros["remover_ambos_sim"] == "1":
         pacientes = [p for p in pacientes if not (p["influenza"] == "SIM" and p["covid"] == "SIM")]
 
